@@ -1,0 +1,138 @@
+import * as THREE from 'three';
+import * as CANNON from 'cannon-es';
+import { CarPhysics } from '../core/physics';
+import type { DriveInput } from '../core/physics';
+import { createCar, createWheel, createPerson, animatePerson, headlightMaterial, tailMaterial } from '../world/models';
+import type { PersonModel } from '../world/models';
+import type { MapDefinition } from '../world/map';
+
+const WALK_SPEED = 6;
+
+export class Player {
+  readonly car: CarPhysics;
+  readonly model: THREE.Group;
+  readonly person: PersonModel;
+  readonly walker: CANNON.Body;
+  readonly focus = new THREE.Vector3();
+  readonly wheels: THREE.Group[];
+  driving = false;
+  transitioning = 0;
+  private world: CANNON.World;
+  private map: MapDefinition;
+  private lights: THREE.SpotLight[];
+  private walkPhase = 0;
+
+  constructor(scene: THREE.Scene, world: CANNON.World, map: MapDefinition) {
+    this.world = world;
+    this.map = map;
+    this.car = new CarPhysics(world, map.spawn.x, map.spawn.z, map.spawn.yaw);
+    this.model = createCar(0x298f89);
+    scene.add(this.model);
+    this.wheels = Array.from({ length: 4 }, () => {
+      const wheel = createWheel();
+      scene.add(wheel);
+      return wheel;
+    });
+    this.person = createPerson(0xf0d6a5, 0xb98261);
+    scene.add(this.person.group);
+    const walkerMaterial = new CANNON.Material({ friction: 0, restitution: 0 });
+    world.addContactMaterial(new CANNON.ContactMaterial(walkerMaterial, world.defaultMaterial, { friction: 0, restitution: 0 }));
+    this.walker = new CANNON.Body({ mass: 78, material: walkerMaterial, shape: new CANNON.Sphere(0.42), fixedRotation: true, linearDamping: 0, position: new CANNON.Vec3(map.spawn.x, 0.45, map.spawn.z + 3.2) });
+    world.addBody(this.walker);
+    this.lights = [-0.6, 0.6].map(side => {
+      const light = new THREE.SpotLight(0xffedc7, 0, 60, 0.48, 0.6, 1.2);
+      light.position.set(side, 0.4, 2.1);
+      light.target.position.set(side, -0.3, 35);
+      this.model.add(light, light.target);
+      return light;
+    });
+    this.sync(0);
+  }
+
+  get nearby(): boolean { return this.walker.position.distanceTo(this.car.body.position) < 5; }
+
+  interact(): string | null {
+    if (this.transitioning > 0) return null;
+    if (this.driving) {
+      if (Math.abs(this.car.speed) > 1.1) return 'Pare o carro para sair.';
+      const origin = this.car.body.position;
+      for (const side of [-1, 1]) {
+        const offset = this.car.body.quaternion.vmult(new CANNON.Vec3(side * 2.5, 0, 0));
+        const destination = origin.vadd(offset);
+        destination.y = 0.55;
+        const blocked = this.world.bodies.some(body => {
+          if (body === this.car.body || body === this.walker || body.shapes[0] instanceof CANNON.Plane) return false;
+          if (body.aabbNeedsUpdate) body.updateAABB();
+          const bounds = body.aabb;
+          return destination.x > bounds.lowerBound.x - 0.5 && destination.x < bounds.upperBound.x + 0.5 && destination.z > bounds.lowerBound.z - 0.5 && destination.z < bounds.upperBound.z + 0.5;
+        });
+        if (blocked) continue;
+        this.walker.position.copy(destination);
+        this.walker.velocity.setZero();
+        this.walker.aabbNeedsUpdate = true;
+        this.world.addBody(this.walker);
+        this.driving = false;
+        this.transitioning = 0.45;
+        return null;
+      }
+      return 'Sem espaco para abrir a porta.';
+    }
+    if (!this.nearby) return 'Aproxime-se do seu carro.';
+    this.driving = true;
+    this.transitioning = 0.45;
+    this.world.removeBody(this.walker);
+    return null;
+  }
+
+  update(input: DriveInput, delta: number, cameraYaw: number): void {
+    this.transitioning = Math.max(0, this.transitioning - delta);
+    if (this.driving && this.transitioning === 0) {
+      this.car.update(input, delta);
+    } else {
+      this.car.update({ throttle: 0, brake: 1, steer: 0, handbrake: true }, delta);
+    }
+    if (!this.driving) {
+      const forward = input.throttle;
+      const horizontal = input.steer;
+      const length = Math.max(1, Math.hypot(forward, horizontal));
+      const velocityX = (Math.sin(cameraYaw) * forward + Math.cos(cameraYaw) * horizontal) / length * WALK_SPEED;
+      const velocityZ = (Math.cos(cameraYaw) * forward - Math.sin(cameraYaw) * horizontal) / length * WALK_SPEED;
+      this.walker.velocity.x = velocityX;
+      this.walker.velocity.z = velocityZ;
+      this.walkPhase += Math.hypot(velocityX, velocityZ) * delta * 2.5;
+      if (Math.hypot(velocityX, velocityZ) > 0.1) this.person.group.rotation.y = Math.atan2(velocityX, velocityZ);
+      animatePerson(this.person, this.walkPhase, Math.hypot(velocityX, velocityZ) > 0.1);
+      this.walker.wakeUp();
+    }
+  }
+
+  sync(night: number): void {
+    const body = this.car.body;
+    this.model.position.copy(body.position);
+    this.model.quaternion.copy(body.quaternion);
+    this.wheels.forEach((wheel, index) => {
+      this.car.vehicle.updateWheelTransform(index);
+      const transform = this.car.vehicle.wheelInfos[index].worldTransform;
+      wheel.position.copy(transform.position);
+      wheel.quaternion.copy(transform.quaternion);
+    });
+    this.person.group.visible = !this.driving && this.transitioning < 0.25;
+    this.person.group.position.set(this.walker.position.x, Math.max(0.02, this.walker.position.y - 0.42), this.walker.position.z);
+    this.focus.copy(this.driving ? this.model.position : this.person.group.position);
+    this.lights.forEach(light => { light.intensity = night * 55; });
+    headlightMaterial.emissiveIntensity = 0.2 + night * 3;
+    tailMaterial.emissiveIntensity = 0.5 + night;
+  }
+
+  recover(): void {
+    const nearest = (value: number) => this.map.roads.reduce((best, road) => Math.abs(road - value) < Math.abs(best - value) ? road : best, this.map.roads[0]);
+    const road = nearest(this.car.body.position.z);
+    const x = THREE.MathUtils.clamp(this.car.body.position.x, -260, 260);
+    this.car.reset(x, road + 4.2, Math.PI / 2);
+    if (!this.driving) {
+      this.walker.position.set(x, 0.55, road + 7.5);
+      this.walker.velocity.setZero();
+      this.walker.aabbNeedsUpdate = true;
+    }
+  }
+}
