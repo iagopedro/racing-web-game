@@ -1,6 +1,6 @@
 # Santa Brisa
 
-Jogo de direcao e exploracao urbana em uma cidade costeira ficticia. Sem missoes, pontuacao ou inventario: entre no carro, escolha uma estacao e explore.
+Jogo de direcao e exploracao urbana com cidades reais geradas a partir de dados abertos e Santa Brisa como demonstracao ficticia offline. Sem missoes, pontuacao ou inventario: entre no carro, escolha uma estacao e explore.
 
 ## Executar
 
@@ -18,7 +18,67 @@ npm run build
 npm run preview
 ```
 
-A pasta `dist` pode ser publicada em hospedagem estatica. Nao ha backend, chaves de API, streaming ou dependencias de servicos externos em tempo de execucao. Fontes, geometria e audio sao locais.
+A pasta `dist` pode ser publicada em hospedagem estatica para a demonstracao offline. Cidades reais usam o servico Node local descrito abaixo; `vite` e `vite preview` encaminham `/api/geo` para ele. O servico escuta apenas em `127.0.0.1:8787`, nao e um backend publico de producao. Fontes tipograficas, modelos dos personagens e audio continuam locais.
+
+## Cidades reais
+
+Em outro terminal, execute:
+
+```sh
+npm run geo:serve
+```
+
+Reinicie o Vite caso ele ja estivesse aberto antes da criacao de `vite.config.ts`. Abra **Cidades reais** no topo da tela:
+
+1. Informe o nome e o centro por latitude/longitude WGS84. O formulario inicia em **Recife Antigo**, latitude `-8.0631`, longitude `-34.8712`.
+2. Escolha um recorte quadrado de **0.2 a 5 km de lado**. Comece com 1 km; 5 km pode conter milhares de edificios.
+3. Mantenha o relevo Copernicus habilitado. Desabilita-lo e uma escolha explicita por terreno plano, registrada nos avisos.
+4. Opcionalmente habilite footprints Microsoft, referencias de imagens e/ou textura Sentinel-2.
+5. Clique em **Gerar e abrir cidade**. A primeira geracao depende da rede e pode levar minutos. A partida reinicia ao trocar de cidade.
+
+Os recortes normalizados e as respostas OSM reutilizaveis ficam em `.geo-cache/`, fora do Git. O cache de geracao dura 24 horas; **Atualizar fontes** ignora esse prazo. Uma URL `?city=<id>` reabre o recorte salvo mesmo apos esse prazo, sem consultar os provedores. O servico local precisa estar ativo para servi-lo; a URL nao transfere o cache para outro computador. **Abrir Santa Brisa offline** volta ao mapa local sem requisicoes geograficas.
+
+### Busca de cidades por nome
+
+**O Nominatim publico exige decisao explicita do responsavel pela aplicacao e cumprimento da [politica de uso](https://operations.osmfoundation.org/policies/nominatim/).** A busca vem desativada. Para uma instalacao local de uso moderado, apos aceitar essa politica, configure no terminal do servidor:
+
+```powershell
+$env:NOMINATIM_URL = 'https://nominatim.openstreetmap.org/search'
+npm run geo:serve
+```
+
+Use **Buscar cidade** e selecione o resultado; ajuste as coordenadas se quiser um bairro especifico. Nao ha autocomplete. As buscas sao serializadas, espacadas por pelo menos 1.1 s, identificadas por User-Agent e cacheadas por 30 dias. Os termos pesquisados sao enviados ao provedor; nao envie dados pessoais. O limite do servico publico e agregado por aplicacao, nao por instalacao: nao distribua muitas instancias apontando para ele. Para mais usuarios, configure uma instancia propria ou outro provedor compativel. `NOMINATIM_URL` e `OVERPASS_URL` permitem trocar os endpoints sem modificar o codigo.
+
+### Fontes integradas
+
+| Fonte | Integracao | Limites e atribuicao |
+| --- | --- | --- |
+| [OpenStreetMap / Overpass](https://wiki.openstreetmap.org/wiki/Overpass_API) | Ruas curvas, cruzamentos, rotatorias, edificios, multipoligonos com patios, parques, rios e agua | ODbL 1.0; atribuicao permanente. Uma consulta por geracao; erros 502/503/504 do endpoint padrao permitem uma tentativa no espelho Kumi, mas 429 nao gera retry. |
+| [Microsoft Global ML Building Footprints](https://github.com/microsoft/GlobalMLBuildingFootprints) | Catalogo por quadkey, leitura streaming de GeoJSONL gzip, recorte espacial e complemento de edificios ausentes | CDLA Permissive 2.0; OSM tem prioridade. Sobreposicao >15% da menor area descarta o footprint ML. Alturas positivas sao estimativas ML; `-1` e ausencia. Downloads limitados a 128 MB comprimidos / 768 MB descompactados por tile. |
+| [Copernicus DEM GLO-30 / AWS](https://registry.opendata.aws/copernicus-dem/) | Leitura parcial HTTP Range de COGs, mosaico de tiles e amostragem de relevo a aproximadamente 30 m | DSM, nao DTM: inclui vegetacao e construcoes. Elevacao original EGM2008; uma origem vertical local e subtraida e preservada em `terrain.datum`. NoData/falhas abortam o relevo solicitado, nunca o substituem silenciosamente por um plano. |
+| [OpenAerialMap](https://docs.openaerialmap.org/api/api/) | Busca de imagens por bounding box, datas, licenca e links de referencia | Cobertura local, nao global. Nenhuma imagem e um resultado explicito. Consulte a licenca/atribuicao da imagem antes de redistribui-la. |
+| [Copernicus Sentinel-2 / Planetary Computer](https://planetarycomputer.microsoft.com/dataset/sentinel-2-l2a) | Busca STAC por recorte, ate 3 cenas com cobertura de nuvens <20%, referencias e textura RGB opcional | Textura reprojetada em EPSG:4326, recortada ao mesmo bbox e cacheada como PNG 1024 x 1024. Resolucao nativa RGB ~10 m, sem classificacao automatica; nao equivale a fotografia de fachadas. |
+
+O catalogo Microsoft padrao foi verificado em 2026-11-04 e aponta para a publicacao de 2026-08-13. `MS_BUILDINGS_INDEX_URL` permite atualizar o indice. Nenhuma dessas integracoes exige chave de API; disponibilidade e limites dos servicos publicos nao sao garantidos. As falhas de fontes complementares aparecem no painel de qualidade, sem interromper os dados principais. Nao ha download automatico de areas ilimitadas.
+
+O painel **Cidades reais** mostra contagens, data da geracao, fontes, licencas, referencias visuais e estimativas. Para o relevo adaptado, aplica-se o aviso:
+
+> produced using Copernicus WorldDEM-30 &copy; DLR e.V. 2010-2014 and &copy; Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved
+
+Consulte a [licenca Copernicus DEM](https://dataspace.copernicus.eu/explore-data/data-collections/copernicus-contributing-missions/collections-description/COP-DEM). Texturas incluem o aviso `Contains modified Copernicus Sentinel data <ano>`. Preserve as atribuicoes e avalie as obrigacoes ODbL/CDLA ao redistribuir bancos de dados combinados ou recortes; gratuidade nao elimina as licencas.
+
+### Pipeline geografico e limites de fidelidade
+
+- `src/geo/types.ts` define o contrato independente do renderizador. O servico valida nome, centro, opcoes e tamanho, consulta as fontes, normaliza e grava JSON atomicamente. Uma geracao por vez; cancelamento, timeout de 9 minutos e limites de resposta evitam trabalho ilimitado.
+- Projecao local equiretangular com raios WGS84 na latitude central: **X leste, Z sul, Y elevacao; 1 unidade = 1 metro**. Adequada a recortes pequenos, nao a uso cadastral. Latitudes suportadas: -75 a 75 graus; recortes cruzando o antimeridiano sao rejeitados.
+- Ruas sao polilinhas reais, nao uma grade inventada. Recorte de linhas nao fecha vias abertas. Poligonos preservam concavidades e aneis internos. Altura de edificio usa `height`, depois `building:levels * 3`, depois estimativa explicita de 9 m; `min_height` e respeitado. Valores extremos sao limitados a 1500 m.
+- Terreno visual, heightfield fisico e amostragem compartilham triangulacao. As superficies de ruas/areas sao recortadas nesses triangulos para nao atravessarem o relevo. Edificios usam extrusoes e colisores em prismas triangulares, sem bloquear patios com caixas envolventes.
+- Malhas sao agrupadas em setores de 128 m, com descarte por distancia e colisores de edificios ativados perto do jogador. O minimapa e pre-renderizado a partir dos mesmos dados. O recorte inteiro fica em memoria; nao ha streaming mundial. Regioes excessivamente densas sao recusadas com orientacao para reduzir o recorte.
+- Inicio e recuperacao usam uma via dirigivel com verificacao de espaco. NPCs usam ciclos conectados das vias, respeitando sentido unico; sem ciclo nao sao inventadas ligacoes. Pedestres circulam apenas nas vias pedonais mapeadas. Faixas, regras de preferencia e semaforos reais ainda nao sao simulados.
+- Pontes mantem o tracado, mas tabuleiros/rampas usam alturas aproximadas. Tuneis sao identificados e excluidos da navegacao, sem escavacao. Larguras sem tags sao estimadas. Agua e vegetacao sao representacoes visuais; nao ha hidrodinamica, natacao ou classificacao ML de imagens. Oceano sem poligono OSM nao recebe contorno inventado.
+- O DEM nao remove telhados nem vegetacao, e uma textura nao altera a geometria. Uma reconstrucao reconhecivel nao e um levantamento de engenharia ou uma replica fotogrametrica.
+
+API local: `GET /api/geo/health`, `GET /api/geo/search?q=...`, `POST /api/geo/maps[?refresh=1]`, `GET /api/geo/maps/<id>`. A geracao recebe `{ name, center: { lat, lon }, sizeKm, elevation, microsoft, imagery, texture? }` e retorna `{ id, warnings }`. Nao exponha esse servico na internet sem autenticar, limitar uso global, gerenciar armazenamento e adaptar a implantacao.
 
 ## Jogar
 
@@ -75,6 +135,9 @@ O menu permite alterar volume, qualidade grafica e velocidade do tempo. **Reposi
 | `src/world/map.ts` | Definicao da cidade, quarteiroes, distritos e sinais |
 | `src/world/city.ts` | Geracao visual e colisores do mapa |
 | `src/world/models.ts` | Geometria original de carros e personagens |
+| `src/world/real-city.ts` | Terreno, superficies georreferenciadas, extrusoes e colisores de cidades reais |
+| `src/geo/` | Contratos, coordenadas, normalizacao, rotas, cliente e seletor de cidades |
+| `server/` | Provedores abertos, cache e API Node local |
 | `src/systems/player.ts` | Personagem, veiculo, interacao e recuperacao |
 | `src/systems/population.ts` | Rotas, trafego, pedestres e renderizacao da frota |
 | `src/systems/daylight.ts` | Relogio, ceu e iluminacao solar |
@@ -82,7 +145,7 @@ O menu permite alterar volume, qualidade grafica e velocidade do tempo. **Reposi
 | `src/systems/camera.ts` | Cameras e consulta de obstaculos |
 | `src/ui.ts`, `src/style.css` | HUD, menus, ajustes e layout responsivo |
 
-Novas cidades podem fornecer outra definicao de mapa e outro gerador tematico, preservando os sistemas de controle, audio e interface. O gerador atual e intencionalmente especifico de Santa Brisa. Novos veiculos requerem geometria e parametrizacao fisica; estacoes sao dados e regras de sintese separadas.
+O contrato de mapa discrimina a demonstracao em grade e as cidades geograficas. Ambos preservam os sistemas de controle, audio e interface; nenhum sistema precisa tratar uma rua real como uma coordenada de grade. Novos veiculos requerem geometria e parametrizacao fisica; estacoes sao dados e regras de sintese separadas.
 
 ## Desempenho
 
@@ -92,6 +155,8 @@ Novas cidades podem fornecer outra definicao de mapa e outro gerador tematico, p
 - Apenas oito luzes de poste proximas e uma luz direcional com sombras. Farol do jogador usa dois spots sem mapas de sombra adicionais.
 - Pixel ratio limitado a 1, 1.5 ou 2 conforme a qualidade; a opcao Leve desativa sombras.
 - A cidade compacta permanece residente em memoria. Nao ha streaming de setores nem LOD de malhas detalhadas: o modelo base ja e simplificado. Essas tecnicas seriam necessarias para mapas significativamente maiores.
+
+Os numeros acima descrevem Santa Brisa. Em cidades reais, densidade de edificios e complexidade dos poligonos variam; o limite de 5 km nao e garantia de desempenho em celulares.
 
 No Chromium automatizado deste ambiente, uma amostra final registrou cerca de 30 FPS, 64 chamadas de desenho e 236 mil triangulos. Isso nao e uma garantia para outros computadores. Os testes moveis usam emulacao de viewport e toque, nao um telefone fisico.
 
@@ -107,11 +172,14 @@ Com o servidor de desenvolvimento executando em outra janela:
 
 ```sh
 npm run test:browser
+npm run test:geo-browser
 ```
 
 O teste usa `http://127.0.0.1:5173`; a variavel `TEST_URL` permite outra porta. No PowerShell: `$env:TEST_URL = 'http://127.0.0.1:5174'`.
 
 Os testes de simulacao verificam suspensao, aceleracao, frenagem, re, velocidade maxima, colisao com parede, sinais sem conflito, continuidade de rotas, tres minutos simulados de trafego, sincronizacao entre rota e corpo, reacao a obstaculos, ciclo completo de dia/noite e entrada/saida.
+
+Os testes geograficos usam fixtures deterministicas sem rede: coordenadas em metros, limites, recorte, multipoligonos/patios, alturas, deduplicacao OSM/ML, rotas sem atalhos inventados, correspondencia entre terreno visual/fisico, conduzir/entrar/sair em terreno elevado, cache e erros de fontes. `test:geo-browser` verifica selecao de cidade, navegacao, atribuicao, avisos e layout desktop/mobile. Para adicionar um smoke test de um recorte Copernicus ja gerado, defina `REAL_CITY_ID` com seu id e execute o mesmo comando. Capturas ficam em `test-results/`.
 
 O teste Playwright verifica pixels nao vazios, aceleracao e frenagem por teclado, saida segura, radio com sinal real de audio, cameras, pausa, ajustes, diferenca visual entre dia/noite, limite do mapa, estabilidade por mais de tres minutos simulados e direcao por toque. Capturas ficam em `test-results/`, incluindo desktop, celular vertical e horizontal. O acesso `window.__game` existe apenas no servidor de desenvolvimento, para diagnostico e testes; nao e incluido na versao de producao.
 
@@ -125,4 +193,4 @@ O teste Playwright verifica pixels nao vazios, aceleracao e frenagem por teclado
 - A trilha e instrumental sintetizada e repetitiva por concepcao, com variacao entre faixas; nao pretende reproduzir a producao de uma radio comercial.
 - A interface possui nomes acessiveis, foco visivel, menus com foco contido e controles alternativos. O mundo 3D depende de visao e controle espacial; nao e uma experiencia integralmente acessivel por leitor de tela.
 
-Todos os modelos e composicoes deste projeto foram criados para esta experiencia. A referencia a jogos urbanos da era PS2 e apenas conceitual; nao sao utilizados mapas, personagens, marcas, musicas ou recursos desses jogos.
+Os modelos dos personagens/veiculos, a demonstracao ficticia e as composicoes foram criados para esta experiencia. As cidades reais derivam das fontes geograficas e licencas listadas acima. A referencia a jogos urbanos da era PS2 e apenas conceitual; nao sao utilizados mapas, personagens, marcas, musicas ou recursos desses jogos.

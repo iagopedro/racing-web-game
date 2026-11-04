@@ -3,6 +3,7 @@ import type * as CANNON from 'cannon-es';
 import { staticBox, addBoundaries } from '../core/physics';
 import { blocks, seeded, signalAllows } from './map';
 import type { MapDefinition } from './map';
+import { createRealCity } from './real-city';
 
 interface Instance { position: number[]; scale: number[]; color: number; rotation: number[] }
 
@@ -43,7 +44,8 @@ export interface City {
   update: (seconds: number, night: number, focus: THREE.Vector3) => void;
 }
 
-export function createCity(scene: THREE.Scene, physics: CANNON.World, map: MapDefinition): City {
+export function createCity(scene: THREE.Scene, physics: CANNON.World, map: MapDefinition, texture?: THREE.Texture): City {
+  if (map.kind === 'real') return createRealCity(scene, physics, map, texture);
   const random = seeded(712);
   const matte = new THREE.MeshStandardMaterial({ roughness: 0.88 });
   const windowsMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffc973, emissiveIntensity: 0, roughness: 0.35, metalness: 0.2 });

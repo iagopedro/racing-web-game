@@ -3,7 +3,9 @@ import type { Input } from './core/input';
 import type { Player } from './systems/player';
 import type { Daylight } from './systems/daylight';
 import type { AudioSystem } from './systems/audio';
-import { district } from './world/map';
+import { district, SANTA_BRISA } from './world/map';
+import type { MapDefinition } from './world/map';
+import { GeoPanel } from './geo/panel';
 
 export interface UIActions { start: () => void; pause: (paused: boolean) => void; quality: (level: string) => void; recover: () => void; camera: () => void }
 
@@ -25,12 +27,16 @@ export class UI {
   private started = false;
   private previousMode = false;
   private wasNight = false;
+  private map: MapDefinition;
+  private geo: GeoPanel;
+  private geographicMinimap?: HTMLCanvasElement;
 
-  constructor(root: HTMLElement, audio: AudioSystem, input: Input, actions: UIActions) {
+  constructor(root: HTMLElement, audio: AudioSystem, input: Input, actions: UIActions, map: MapDefinition = SANTA_BRISA) {
     this.root = root;
     this.audio = audio;
     this.input = input;
     this.actions = actions;
+    this.map = map;
     root.insertAdjacentHTML('beforeend', `
       <div class="hud" id="hud">
         <header class="topbar">
@@ -63,6 +69,32 @@ export class UI {
     this.mapCanvas = this.element('minimap');
     this.settings = this.element('settings-dialog');
     this.help = this.element('help-dialog');
+    this.geo = new GeoPanel(root, map, value => { input.clear(); actions.pause(value); });
+    if (map.kind === 'real') {
+      this.element('welcome-title').textContent = map.name;
+      this.element('welcome').querySelector('.eyebrow')!.textContent = 'CIDADE REAL / DADOS ABERTOS';
+      this.element('welcome').querySelector('.welcome-caption')!.textContent = `${map.data.size / 1000} x ${map.data.size / 1000} KM / ESCALA 1:1`;
+      this.element('edition').textContent = `${map.data.center.lat.toFixed(5)}, ${map.data.center.lon.toFixed(5)}`;
+      root.querySelector('.district .eyebrow')!.textContent = map.name;
+      root.querySelector('.brand-sub')!.textContent = 'CIDADES REAIS';
+      this.geographicMinimap = document.createElement('canvas');
+      this.geographicMinimap.width = this.geographicMinimap.height = 2048;
+      const context = this.geographicMinimap.getContext('2d')!;
+      context.scale(2048 / map.data.size, 2048 / map.data.size);
+      context.translate(map.extent, map.extent);
+      for (const area of map.data.areas) {
+        context.fillStyle = area.kind === 'water' ? '#487f80' : '#56794e'; context.beginPath();
+        for (const ring of area.polygon) { ring.forEach((point, index) => index ? context.lineTo(point.x, point.z) : context.moveTo(point.x, point.z)); context.closePath(); }
+        context.fill('evenodd');
+      }
+      for (const road of map.data.roads) {
+        if (road.tunnel) continue;
+        context.strokeStyle = road.kind === 'waterway' ? '#487f80' : '#a9b5a2'; context.lineWidth = road.width;
+        context.beginPath();
+        road.points.forEach((point, index) => index ? context.lineTo(point.x, point.z) : context.moveTo(point.x, point.z));
+        context.stroke();
+      }
+    }
     this.icons();
     this.click('start-button', () => { this.started = true; root.classList.add('started'); actions.start(); if (!matchMedia('(pointer: coarse)').matches) this.toast('WASD para andar. E para entrar no carro.'); });
     this.click('interact-button', () => input.action('KeyE'));
@@ -120,8 +152,8 @@ export class UI {
 
   openSettings(): void { this.input.clear(); this.actions.pause(true); this.settings.showModal(); }
   openHelp(): void { this.input.clear(); this.actions.pause(true); this.help.showModal(); }
-  get dialogOpen(): boolean { return this.settings.open || this.help.open; }
-  closeDialogs(): void { this.settings.close(); this.help.close(); this.actions.pause(false); this.input.clear(); (document.activeElement as HTMLElement)?.blur(); }
+  get dialogOpen(): boolean { return this.settings.open || this.help.open || this.geo.dialog.open; }
+  closeDialogs(): void { this.settings.close(); this.help.close(); this.geo.close(); this.actions.pause(false); this.input.clear(); (document.activeElement as HTMLElement)?.blur(); }
 
   toast(message: string): void {
     const toast = this.element('toast');
@@ -173,11 +205,11 @@ export class UI {
     if (!this.started) return;
     const speed = Math.round(Math.abs(player.car.speed) * 3.6);
     this.speed.textContent = String(player.driving ? speed : 0).padStart(3, '0');
-    this.location.textContent = district(player.focus);
+    this.location.textContent = this.map.kind === 'real' ? this.map.name : district(player.focus);
     this.element('speed-bar').style.width = `${Math.min(100, speed / 1.3)}%`;
     this.element('gear').textContent = !player.driving || speed < 1 ? 'N' : player.car.speed < 0 ? 'R' : String(Math.min(5, 1 + Math.floor(speed / 27)));
     this.element('vehicle-label').textContent = player.driving ? 'BRISA GT / 1986' : 'A PE';
-    this.element('car-name').textContent = player.driving ? 'TRACAO TRASEIRA' : 'ORLA DO SOL';
+    this.element('car-name').textContent = player.driving ? 'TRACAO TRASEIRA' : this.map.kind === 'real' ? 'ESCALA REAL' : 'ORLA DO SOL';
     this.root.classList.toggle('driving', player.driving);
     this.interact.hidden = !player.driving && !player.nearby;
     this.interact.querySelector('span')!.textContent = player.driving ? 'Sair do carro' : 'Entrar no carro';
@@ -192,12 +224,16 @@ export class UI {
     context.scale(1.7, 1.7);
     context.translate(-player.focus.x, -player.focus.z);
     context.fillStyle = '#7a9584';
-    for (const road of [-280, -168, -56, 56, 168, 280]) {
-      context.fillRect(road - 7, -289, 14, 578);
-      context.fillRect(-289, road - 7, 578, 14);
+    if (this.map.kind === 'grid') {
+      for (const road of this.map.roads) {
+        context.fillRect(road - 7, -289, 14, 578);
+        context.fillRect(-289, road - 7, 578, 14);
+      }
+      context.fillStyle = '#487f80';
+      context.fillRect(-1000, 318, 2000, 1000);
+    } else if (this.geographicMinimap) {
+      context.drawImage(this.geographicMinimap, -this.map.extent, -this.map.extent, this.map.data.size, this.map.data.size);
     }
-    context.fillStyle = '#487f80';
-    context.fillRect(-1000, 318, 2000, 1000);
     context.restore();
     context.save();
     context.translate(150, 150);

@@ -3,16 +3,18 @@ import type { MapDefinition } from '../world/map';
 
 export const FIXED_STEP = 1 / 60;
 
-export function createPhysics(): CANNON.World {
+export function createPhysics(flatFloor = true): CANNON.World {
   const world = new CANNON.World({ gravity: new CANNON.Vec3(0, -9.82, 0), allowSleep: true });
   world.broadphase = new CANNON.SAPBroadphase(world);
   (world.solver as CANNON.GSSolver).iterations = 12;
   world.defaultContactMaterial.friction = 0.3;
   world.defaultContactMaterial.restitution = 0.04;
-  const floor = new CANNON.Body({ mass: 0, material: world.defaultMaterial, shape: new CANNON.Plane() });
-  floor.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
-  floor.aabbNeedsUpdate = true;
-  world.addBody(floor);
+  if (flatFloor) {
+    const floor = new CANNON.Body({ mass: 0, material: world.defaultMaterial, shape: new CANNON.Plane() });
+    floor.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
+    floor.aabbNeedsUpdate = true;
+    world.addBody(floor);
+  }
   return world;
 }
 
@@ -41,7 +43,7 @@ export class CarPhysics {
   engine = 0;
   private forward = new CANNON.Vec3();
 
-  constructor(world: CANNON.World, x: number, z: number, yaw: number) {
+  constructor(world: CANNON.World, x: number, z: number, yaw: number, y = 0) {
     this.body = new CANNON.Body({ mass: 1250, linearDamping: 0.12, angularDamping: 0.5, allowSleep: false });
     this.body.addShape(new CANNON.Box(new CANNON.Vec3(0.94, 0.38, 2.05)), new CANNON.Vec3(0, 0.24, 0));
     this.vehicle = new CANNON.RaycastVehicle({ chassisBody: this.body, indexRightAxis: 0, indexUpAxis: 1, indexForwardAxis: 2 });
@@ -58,7 +60,7 @@ export class CarPhysics {
       }
     }
     this.vehicle.addToWorld(world);
-    this.reset(x, z, yaw);
+    this.reset(x, z, yaw, y);
   }
 
   get speed(): number {
@@ -82,8 +84,8 @@ export class CarPhysics {
     }
   }
 
-  reset(x: number, z: number, yaw: number): void {
-    this.body.position.set(x, 0.95, z);
+  reset(x: number, z: number, yaw: number, y = 0): void {
+    this.body.position.set(x, y + 0.95, z);
     this.body.quaternion.setFromEuler(0, yaw, 0);
     this.body.velocity.setZero();
     this.body.angularVelocity.setZero();

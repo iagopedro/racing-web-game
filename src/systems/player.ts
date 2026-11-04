@@ -5,6 +5,7 @@ import type { DriveInput } from '../core/physics';
 import { createCar, createWheel, createPerson, animatePerson, headlightMaterial, tailMaterial } from '../world/models';
 import type { PersonModel } from '../world/models';
 import type { MapDefinition } from '../world/map';
+import { recoveryPoint, surfaceHeight } from '../world/map';
 
 const WALK_SPEED = 6;
 
@@ -25,7 +26,7 @@ export class Player {
   constructor(scene: THREE.Scene, world: CANNON.World, map: MapDefinition) {
     this.world = world;
     this.map = map;
-    this.car = new CarPhysics(world, map.spawn.x, map.spawn.z, map.spawn.yaw);
+    this.car = new CarPhysics(world, map.spawn.x, map.spawn.z, map.spawn.yaw, map.spawn.y);
     this.model = createCar(0x298f89);
     scene.add(this.model);
     this.wheels = Array.from({ length: 4 }, () => {
@@ -38,6 +39,10 @@ export class Player {
     const walkerMaterial = new CANNON.Material({ friction: 0, restitution: 0 });
     world.addContactMaterial(new CANNON.ContactMaterial(walkerMaterial, world.defaultMaterial, { friction: 0, restitution: 0 }));
     this.walker = new CANNON.Body({ mass: 78, material: walkerMaterial, shape: new CANNON.Sphere(0.42), fixedRotation: true, linearDamping: 0, position: new CANNON.Vec3(map.spawn.x, 0.45, map.spawn.z + 3.2) });
+    if (map.kind === 'real') {
+      const x = map.spawn.x - Math.sin(map.spawn.yaw) * 3.2, z = map.spawn.z - Math.cos(map.spawn.yaw) * 3.2;
+      this.walker.position.set(x, surfaceHeight(map, x, z, map.data.spawn.y + 1) + 0.55, z);
+    }
     world.addBody(this.walker);
     this.lights = [-0.6, 0.6].map(side => {
       const light = new THREE.SpotLight(0xffedc7, 0, 60, 0.48, 0.6, 1.2);
@@ -59,12 +64,14 @@ export class Player {
       for (const side of [-1, 1]) {
         const offset = this.car.body.quaternion.vmult(new CANNON.Vec3(side * 2.5, 0, 0));
         const destination = origin.vadd(offset);
-        destination.y = 0.55;
+        destination.y = surfaceHeight(this.map, destination.x, destination.z, origin.y + 1) + 0.55;
+        if (Math.abs(destination.x) > this.map.extent - 1 || Math.abs(destination.z) > this.map.extent - 1) continue;
         const blocked = this.world.bodies.some(body => {
-          if (body === this.car.body || body === this.walker || body.shapes[0] instanceof CANNON.Plane) return false;
+          if (body === this.car.body || body === this.walker || body.shapes[0] instanceof CANNON.Plane || body.shapes[0] instanceof CANNON.Heightfield || body.collisionFilterGroup === 2) return false;
           if (body.aabbNeedsUpdate) body.updateAABB();
           const bounds = body.aabb;
-          return destination.x > bounds.lowerBound.x - 0.5 && destination.x < bounds.upperBound.x + 0.5 && destination.z > bounds.lowerBound.z - 0.5 && destination.z < bounds.upperBound.z + 0.5;
+          return destination.x > bounds.lowerBound.x - 0.5 && destination.x < bounds.upperBound.x + 0.5 && destination.z > bounds.lowerBound.z - 0.5 && destination.z < bounds.upperBound.z + 0.5 &&
+            destination.y + 1.3 > bounds.lowerBound.y && destination.y - 0.5 < bounds.upperBound.y;
         });
         if (blocked) continue;
         this.walker.position.copy(destination);
@@ -125,12 +132,12 @@ export class Player {
   }
 
   recover(): void {
-    const nearest = (value: number) => this.map.roads.reduce((best, road) => Math.abs(road - value) < Math.abs(best - value) ? road : best, this.map.roads[0]);
-    const road = nearest(this.car.body.position.z);
-    const x = THREE.MathUtils.clamp(this.car.body.position.x, -260, 260);
-    this.car.reset(x, road + 4.2, Math.PI / 2);
+    const point = recoveryPoint(this.map, this.car.body.position);
+    this.car.reset(point.x, point.z, point.yaw, point.y);
     if (!this.driving) {
-      this.walker.position.set(x, 0.55, road + 7.5);
+      const x = this.map.kind === 'real' ? point.x - Math.sin(point.yaw) * 3.2 : point.x;
+      const z = this.map.kind === 'real' ? point.z - Math.cos(point.yaw) * 3.2 : point.z + 3.3;
+      this.walker.position.set(x, surfaceHeight(this.map, x, z, point.y + 1) + 0.55, z);
       this.walker.velocity.setZero();
       this.walker.aabbNeedsUpdate = true;
     }
