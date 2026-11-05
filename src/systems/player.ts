@@ -9,6 +9,10 @@ import { recoveryPoint, surfaceHeight } from '../world/map';
 import { bodyOverlapsSphere } from '../core/collision';
 
 const WALK_SPEED = 6;
+const bodyPosition = new THREE.Vector3();
+const bodyRotation = new THREE.Quaternion();
+const inverseRotation = new THREE.Quaternion();
+const previousRotation = new THREE.Quaternion();
 
 export class Player {
   readonly car: CarPhysics;
@@ -78,6 +82,7 @@ export class Player {
         });
         if (blocked) continue;
         this.walker.position.copy(destination);
+        this.walker.previousPosition.copy(destination);
         this.walker.velocity.setZero();
         this.walker.aabbNeedsUpdate = true;
         this.world.addBody(this.walker);
@@ -116,18 +121,25 @@ export class Player {
     }
   }
 
-  sync(night: number): void {
+  sync(night: number, alpha = 1): void {
+    // Render between the last two fixed steps so motion stays smooth at any refresh rate.
     const body = this.car.body;
-    this.model.position.copy(body.position);
-    this.model.quaternion.copy(body.quaternion);
+    bodyPosition.set(body.position.x, body.position.y, body.position.z);
+    bodyRotation.set(body.quaternion.x, body.quaternion.y, body.quaternion.z, body.quaternion.w);
+    this.model.position.set(body.previousPosition.x, body.previousPosition.y, body.previousPosition.z).lerp(bodyPosition, alpha);
+    previousRotation.set(body.previousQuaternion.x, body.previousQuaternion.y, body.previousQuaternion.z, body.previousQuaternion.w);
+    this.model.quaternion.slerpQuaternions(previousRotation, bodyRotation, alpha);
+    inverseRotation.copy(bodyRotation).invert();
     this.wheels.forEach((wheel, index) => {
       this.car.vehicle.updateWheelTransform(index);
       const transform = this.car.vehicle.wheelInfos[index].worldTransform;
-      wheel.position.copy(transform.position);
-      wheel.quaternion.copy(transform.quaternion);
+      wheel.position.copy(transform.position).sub(bodyPosition).applyQuaternion(inverseRotation).applyQuaternion(this.model.quaternion).add(this.model.position);
+      wheel.quaternion.copy(transform.quaternion).premultiply(inverseRotation).premultiply(this.model.quaternion);
     });
     this.person.group.visible = !this.driving && this.transitioning < 0.25;
-    this.person.group.position.set(this.walker.position.x, this.walker.position.y - 0.42, this.walker.position.z);
+    const walker = this.walker;
+    this.person.group.position.set(walker.previousPosition.x, walker.previousPosition.y - 0.42, walker.previousPosition.z)
+      .lerp(bodyPosition.set(walker.position.x, walker.position.y - 0.42, walker.position.z), alpha);
     this.focus.copy(this.driving ? this.model.position : this.person.group.position);
     this.lights.forEach(light => { light.intensity = night * 55; });
     headlightMaterial.emissiveIntensity = 0.2 + night * 3;
@@ -141,6 +153,7 @@ export class Player {
       const x = this.map.kind === 'real' ? point.x - Math.sin(point.yaw) * 3.2 : point.x;
       const z = this.map.kind === 'real' ? point.z - Math.cos(point.yaw) * 3.2 : point.z + 3.3;
       this.walker.position.set(x, surfaceHeight(this.map, x, z, point.y + 1) + 0.55, z);
+      this.walker.previousPosition.copy(this.walker.position);
       this.walker.velocity.setZero();
       this.walker.aabbNeedsUpdate = true;
     }

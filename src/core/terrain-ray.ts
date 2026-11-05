@@ -39,6 +39,13 @@ class TerrainRay extends CANNON.Ray {
 
 export class DrivingWorld extends CANNON.World {
   private terrainRay = new TerrainRay();
+  constructor(options?: ConstructorParameters<typeof CANNON.World>[0]) {
+    super(options);
+    // The default matrix holds n^2/2 entries and clears them twice per step: with
+    // thousands of static colliders this dominated the frame time.
+    this.collisionMatrix = new CANNON.ObjectCollisionMatrix() as unknown as CANNON.ArrayCollisionMatrix;
+    this.collisionMatrixPrevious = new CANNON.ObjectCollisionMatrix() as unknown as CANNON.ArrayCollisionMatrix;
+  }
   override raycastClosest(from = new CANNON.Vec3(), to = new CANNON.Vec3(), options: CANNON.RayOptions = {}, result = new CANNON.RaycastResult()): boolean {
     return this.terrainRay.intersectWorld(this, { ...options, from, to, result, mode: CANNON.Ray.CLOSEST });
   }

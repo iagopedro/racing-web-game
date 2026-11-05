@@ -43,6 +43,7 @@ export class CarPhysics {
   steering = 0;
   engine = 0;
   private forward = new CANNON.Vec3();
+  private static readonly axis = new CANNON.Vec3(0, 0, 1);
 
   constructor(world: CANNON.World, x: number, z: number, yaw: number, y = 0) {
     this.body = new CANNON.Body({ mass: 1250, linearDamping: 0.12, angularDamping: 0.5, allowSleep: false });
@@ -65,7 +66,7 @@ export class CarPhysics {
   }
 
   get speed(): number {
-    this.body.quaternion.vmult(new CANNON.Vec3(0, 0, 1), this.forward);
+    this.body.quaternion.vmult(CarPhysics.axis, this.forward);
     return this.body.velocity.dot(this.forward);
   }
 
@@ -93,6 +94,7 @@ export class CarPhysics {
     this.body.force.setZero();
     this.body.torque.setZero();
     this.body.previousPosition.copy(this.body.position);
+    this.body.previousQuaternion.copy(this.body.quaternion);
     this.body.interpolatedPosition.copy(this.body.position);
     this.body.aabbNeedsUpdate = true;
     this.body.wakeUp();

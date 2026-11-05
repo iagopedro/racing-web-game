@@ -114,8 +114,11 @@ async function initialize(): Promise<void> {
       accumulator += delta;
       let steps = 0;
       while (accumulator >= FIXED_STEP && steps < 6) { fixedUpdate(drive); accumulator -= FIXED_STEP; steps++; }
-      player.sync(day.night);
-      population.render(player.focus, player.car.body.position);
+      // Drop backlog after a long frame instead of spiralling into catch-up steps.
+      accumulator = Math.min(accumulator, FIXED_STEP);
+      const alpha = accumulator / FIXED_STEP;
+      player.sync(day.night, alpha);
+      population.render(player.focus, player.car.body.position, alpha);
       city.update(seconds, day.night, player.focus, parkedCar.copy(player.car.body.position));
       camera.update(player, delta, started);
       audio.update(player.driving, player.car.speed, drive.throttle);

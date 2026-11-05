@@ -1,7 +1,6 @@
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { staticBox } from '../core/physics';
 import { terrainHeight } from '../geo/coordinates';
 import { roadOffsets, roadSegment } from '../geo/roads';
 import type { Building, LocalPoint, Polygon, Terrain } from '../geo/types';
@@ -156,11 +155,24 @@ export function createRealCity(scene: THREE.Scene, world: CANNON.World, map: Rea
   colliderLabels.set(ground.id, 'terrain');
   const groundMesh = new THREE.Mesh(terrainGeometry(terrain), new THREE.MeshStandardMaterial({ color: texture ? 0xffffff : 0xb4b49a, map: texture ?? null, roughness: 1 }));
   groundMesh.receiveShadow = true; scene.add(groundMesh);
-  const chunks = new Map<string, { group: THREE.Group; bounds: THREE.Box3; collisionBounds: THREE.Box3; parts: Map<number, THREE.BufferGeometry[]>; buildings: Building[]; bodies: CANNON.Body[]; active: boolean }>();
+  const chunks = new Map<string, { group: THREE.Group; bounds: THREE.Box3; collisionBounds: THREE.Box3; parts: Map<number, THREE.BufferGeometry[]>; buildings: Building[]; built: number; bodies: CANNON.Body[]; labels: Map<CANNON.Body, string>; active: boolean }>();
   const chunkAt = (x: number, z: number) => {
     const key = `${Math.floor(x / 128)}:${Math.floor(z / 128)}`;
-    if (!chunks.has(key)) chunks.set(key, { group: new THREE.Group(), bounds: new THREE.Box3(), collisionBounds: new THREE.Box3(), parts: new Map(), buildings: [], bodies: [], active: false });
+    if (!chunks.has(key)) chunks.set(key, { group: new THREE.Group(), bounds: new THREE.Box3(), collisionBounds: new THREE.Box3(), parts: new Map(), buildings: [], built: 0, bodies: [], labels: new Map(), active: false });
     return chunks.get(key)!;
+  };
+  type Chunk = ReturnType<typeof chunkAt>;
+  const buildNext = (chunk: Chunk) => {
+    const building = chunk.buildings[chunk.built++];
+    const body = buildingBody(building, terrain);
+    chunk.labels.set(body, building.id); chunk.bodies.push(body);
+  };
+  const addStatic = (body: CANNON.Body, label: string, x: number, z: number) => {
+    const chunk = chunkAt(x, z);
+    body.updateAABB();
+    chunk.collisionBounds.expandByPoint(new THREE.Vector3(body.aabb.lowerBound.x, body.aabb.lowerBound.y, body.aabb.lowerBound.z));
+    chunk.collisionBounds.expandByPoint(new THREE.Vector3(body.aabb.upperBound.x, body.aabb.upperBound.y, body.aabb.upperBound.z));
+    chunk.bodies.push(body); chunk.labels.set(body, label);
   };
   const add = (geometry: THREE.BufferGeometry, color: number, x: number, z: number) => {
     const chunk = chunkAt(x, z);
@@ -184,8 +196,7 @@ export function createRealCity(scene: THREE.Scene, world: CANNON.World, map: Rea
       if (road.bridge) {
         const body = surfaceBody(geometry, 0.3);
         body.collisionFilterGroup = 2;
-        world.addBody(body); colliders.push(body);
-        colliderLabels.set(body.id, road.id);
+        addStatic(body, road.id, (a.x + b.x) / 2, (a.z + b.z) / 2);
       }
       add(geometry, road.kind === 'waterway' ? 0x448f9a : road.surface === 'paving_stones' || !road.drive ? 0xbeb9a3 : 0x505c60, (a.x + b.x) / 2, (a.z + b.z) / 2);
     }
@@ -238,31 +249,34 @@ export function createRealCity(scene: THREE.Scene, world: CANNON.World, map: Rea
     const elevations = [start, along, end].map(value => terrainHeight(terrain, axis === 'x' ? x : value, axis === 'z' ? z : value));
     const bottom = Math.min(...elevations) - 0.2, top = Math.max(...elevations) + 1.4;
     const width = axis === 'x' ? 0.6 : step + 0.02, depth = axis === 'z' ? 0.6 : step + 0.02;
-    const body = staticBox(world, x, (bottom + top) / 2, z, width, top - bottom, depth);
+    const body = new CANNON.Body({ mass: 0, material: world.defaultMaterial, shape: new CANNON.Box(new CANNON.Vec3(width / 2, (top - bottom) / 2, depth / 2)) });
+    body.position.set(x, (bottom + top) / 2, z);
     const mesh = new THREE.Mesh(new THREE.BoxGeometry(width, top - bottom, depth), barrierMaterial);
     mesh.name = 'Limite visivel do recorte'; mesh.position.copy(body.position); mesh.receiveShadow = true;
-    scene.add(mesh); colliders.push(body);
-    colliderLabels.set(body.id, 'boundary');
+    scene.add(mesh); addStatic(body, 'boundary', x, z);
   }
+  // Only colliders near the player or the parked car take part in the simulation;
+  // building colliders of approaching sectors are prepared in small time slices.
   const update = (_seconds: number, _night: number, focus: THREE.Vector3, parkedCar?: THREE.Vector3) => {
+    const pending: Chunk[] = [];
     for (const chunk of chunks.values()) {
       const distance = chunk.bounds.distanceToPoint(focus);
       const carDistance = parkedCar ? chunk.bounds.distanceToPoint(parkedCar) : Infinity;
       chunk.group.visible = Math.min(distance, carDistance) < 850;
-      const active = chunk.buildings.length > 0 && Math.min(chunk.collisionBounds.distanceToPoint(focus),
-        parkedCar ? chunk.collisionBounds.distanceToPoint(parkedCar) : Infinity) < 260;
+      const collisionDistance = Math.min(chunk.collisionBounds.distanceToPoint(focus), parkedCar ? chunk.collisionBounds.distanceToPoint(parkedCar) : Infinity);
+      const active = (chunk.buildings.length > 0 || chunk.bodies.length > 0) && collisionDistance < 260;
+      if (!active && collisionDistance < 480 && chunk.built < chunk.buildings.length) pending.push(chunk);
       if (active === chunk.active) continue;
       chunk.active = active;
       if (active) {
-        chunk.bodies = chunk.buildings.map(building => {
-          const body = buildingBody(building, terrain); colliderLabels.set(body.id, building.id); return body;
-        });
-        chunk.bodies.forEach(body => { world.addBody(body); colliders.push(body); });
+        while (chunk.built < chunk.buildings.length) buildNext(chunk);
+        chunk.bodies.forEach(body => { world.addBody(body); colliders.push(body); colliderLabels.set(body.id, chunk.labels.get(body)!); });
       } else {
         chunk.bodies.forEach(body => { world.removeBody(body); colliders.splice(colliders.indexOf(body), 1); colliderLabels.delete(body.id); });
-        chunk.bodies = [];
       }
     }
+    const deadline = performance.now() + 1;
+    for (const chunk of pending) while (chunk.built < chunk.buildings.length && performance.now() < deadline) buildNext(chunk);
   };
   update(0, 0, new THREE.Vector3(map.spawn.x, 0, map.spawn.z));
   return { colliders, colliderLabels, update };

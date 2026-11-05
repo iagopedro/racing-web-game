@@ -67,6 +67,7 @@ export class Population {
   private meshes: THREE.InstancedMesh[] = [];
   private wheels: THREE.InstancedMesh;
   private transform = new THREE.Object3D();
+  private wheelOffset = new CANNON.Vec3();
   private map: MapDefinition;
   private roadSegments = new SpatialIndex<{ a: Point; b: Point; width: number; height: number }>();
 
@@ -221,21 +222,25 @@ export class Population {
     }
   }
 
-  render(focus: THREE.Vector3, parkedCar?: CANNON.Vec3): void {
+  render(focus: THREE.Vector3, parkedCar?: CANNON.Vec3, alpha = 1): void {
+    const offset = this.wheelOffset;
     this.cars.forEach((car, index) => {
       const visible = car.active && (Math.hypot(car.body.position.x - focus.x, car.body.position.z - focus.z) < 240 ||
         Boolean(parkedCar && Math.hypot(car.body.position.x - parkedCar.x, car.body.position.z - parkedCar.z) < 10));
       car.body.collisionResponse = visible;
-      this.transform.position.set(car.body.position.x, car.body.position.y - 0.19, car.body.position.z);
+      const { position, previousPosition } = car.body;
+      const x = previousPosition.x + (position.x - previousPosition.x) * alpha;
+      const y = previousPosition.y + (position.y - previousPosition.y) * alpha;
+      const z = previousPosition.z + (position.z - previousPosition.z) * alpha;
+      this.transform.position.set(x, y - 0.19, z);
       this.transform.quaternion.copy(car.body.quaternion);
       this.transform.scale.setScalar(visible ? 1 : 0);
       this.transform.updateMatrix();
       this.meshes.forEach(mesh => mesh.setMatrixAt(index, this.transform.matrix));
       for (let wheel = 0; wheel < 4; wheel++) {
-        const localX = wheel % 2 ? 0.94 : -0.94;
-        const localZ = wheel < 2 ? 1.36 : -1.35;
-        const offset = car.body.quaternion.vmult(new CANNON.Vec3(localX, -0.46, localZ));
-        this.transform.position.set(car.body.position.x + offset.x, car.body.position.y + offset.y, car.body.position.z + offset.z);
+        offset.set(wheel % 2 ? 0.94 : -0.94, -0.46, wheel < 2 ? 1.36 : -1.35);
+        car.body.quaternion.vmult(offset, offset);
+        this.transform.position.set(x + offset.x, y + offset.y, z + offset.z);
         this.transform.quaternion.copy(car.body.quaternion);
         this.transform.rotateX(car.distance / 0.36);
         this.transform.updateMatrix();
