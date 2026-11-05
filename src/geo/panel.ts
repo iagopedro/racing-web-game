@@ -22,12 +22,12 @@ export class GeoPanel {
           <select id="geo-results" aria-label="Resultados da busca" hidden></select>
           <div class="geo-coordinates"><label>Latitude<input id="geo-lat" type="number" step="any" min="-75" max="75" value="-8.0631" required></label><label>Longitude<input id="geo-lon" type="number" step="any" min="-180" max="180" value="-34.8712" required></label></div>
           <label for="geo-size">Lado do recorte (km, quadrado)</label><input id="geo-size" type="number" min="0.2" max="5" step="0.1" value="1" required>
-          <label class="toggle-label">Relevo Copernicus GLO-30 (~30 m)<input type="checkbox" id="geo-elevation" checked></label>
+          <label class="toggle-label">Relevo urbano filtrado / Copernicus (~30 m)<input type="checkbox" id="geo-elevation" checked></label>
           <label class="toggle-label">Complementar edificios com Microsoft ML<input type="checkbox" id="geo-microsoft"></label>
           <label class="toggle-label">Consultar imagens OAM / Sentinel-2<input type="checkbox" id="geo-imagery" checked></label>
           <label class="toggle-label">Textura de superficie Sentinel-2 (~10 m)<input type="checkbox" id="geo-texture"></label>
           <label class="toggle-label">Atualizar fontes (ignorar cache de 24 h)<input type="checkbox" id="geo-refresh"></label>
-          <p class="geo-description">Microsoft pode baixar tiles de ate 128 MB cada. A textura opcional usa uma cena Sentinel-2 recortada; OAM fornece referencias externas. Sem relevo selecionado, o terreno sera plano e identificado como tal.</p>
+          <p class="geo-description">O relevo e uma aproximacao filtrada para reduzir telhados no piso, nao um levantamento de terreno. Microsoft pode baixar tiles de ate 128 MB. Sentinel-2 fornece textura de baixa resolucao, nao fachadas. Sem relevo selecionado, o terreno sera plano.</p>
           <div class="dialog-actions"><button type="submit" class="start-button" id="geo-generate">Gerar e abrir cidade</button><button type="button" class="secondary-button" id="geo-cancel" hidden>Cancelar</button></div>
         </form>
         <p id="geo-status" role="status" aria-live="polite"></p>

@@ -1,6 +1,7 @@
 import { realMap, SANTA_BRISA } from '../world/map';
 import type { MapDefinition } from '../world/map';
 import type { CityData } from './types';
+import { CITY_VERSION } from './types';
 
 export async function geoRequest<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response;
@@ -20,7 +21,8 @@ export async function selectedMap(): Promise<MapDefinition> {
   if (!id) return SANTA_BRISA;
   if (!/^[a-f0-9]{32}$/.test(id)) throw new Error('Identificador de cidade invalido.');
   const data = await geoRequest<CityData>(`/maps/${id}`, { signal: AbortSignal.timeout(30000) });
-  if (data.version !== 1 || data.id !== id || !Array.isArray(data.roads) || !Array.isArray(data.buildings) ||
+  if (data.version !== CITY_VERSION) throw new Error('Recorte de uma versao antiga. Volte a demonstracao e gere a cidade novamente para aplicar as correcoes.');
+  if (data.id !== id || !Array.isArray(data.roads) || !Array.isArray(data.buildings) ||
       !data.terrain || data.terrain.heights.length !== (data.terrain.segments + 1) ** 2 ||
       !data.terrain.heights.every(Number.isFinite) || !Number.isFinite(data.spawn?.y)) throw new Error('Recorte salvo invalido. Gere a regiao novamente.');
   return realMap(data);

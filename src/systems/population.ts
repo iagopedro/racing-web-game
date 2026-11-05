@@ -5,13 +5,17 @@ import type { MapDefinition, Point } from '../world/map';
 import { carGeometries, glassMaterial, trimMaterial, headlightMaterial, tailMaterial, tireGeometry, tireMaterial, createPerson, animatePerson } from '../world/models';
 import type { PersonModel } from '../world/models';
 import { geographicRoutes } from '../geo/routes';
+import { nearestOnSegment } from '../geo/coordinates';
+import { SpatialIndex } from '../geo/spatial';
 
 export class LoopRoute {
   points: (Point & { y?: number })[];
   lengths: number[];
   length: number;
   constructor(points: (Point & { y?: number })[]) {
-    this.points = points;
+    this.points = points.filter((point, index) => Math.hypot(point.x - points[(index + 1) % points.length].x, point.z - points[(index + 1) % points.length].z) > 0.001);
+    if (this.points.length < 2) throw new Error('Rota sem comprimento navegavel.');
+    points = this.points;
     this.lengths = points.map((point, index) => {
       const next = points[(index + 1) % points.length];
       return Math.hypot(next.x - point.x, next.z - point.z);
@@ -64,9 +68,16 @@ export class Population {
   private wheels: THREE.InstancedMesh;
   private transform = new THREE.Object3D();
   private map: MapDefinition;
+  private roadSegments = new SpatialIndex<{ a: Point; b: Point; width: number; height: number }>();
 
   constructor(scene: THREE.Scene, world: CANNON.World, map: MapDefinition) {
     this.map = map;
+    if (map.kind === 'real') for (const road of map.data.roads.filter(road => road.drive)) {
+      for (let i = 1; i < road.points.length; i++) {
+        const segment = { a: road.points[i - 1], b: road.points[i], width: road.width, height: (road.heights[i - 1] + road.heights[i]) / 2 };
+        this.roadSegments.add(segment, [segment.a, segment.b], road.width / 2);
+      }
+    }
     const random = seeded(41);
     const realRoutes = map.kind === 'real' ? geographicRoutes(map.data) : undefined;
     const count = realRoutes ? realRoutes.cars.length : 30;
@@ -129,7 +140,7 @@ export class Population {
       const car = this.cars[index];
       const distanceToPlayer = Math.hypot(car.body.position.x - focus.x, car.body.position.z - focus.z);
       if (distanceToPlayer > 230) car.active = index < (night > 0.7 ? 17 : 30);
-      car.body.collisionResponse = car.active;
+      car.body.collisionResponse = car.active && (distanceToPlayer < 240 || Math.hypot(car.body.position.x - player.position.x, car.body.position.z - player.position.z) < 10);
       if (!car.active) { car.body.velocity.setZero(); continue; }
       car.pause = Math.max(0, car.pause - delta);
       const point = car.route.sample(car.distance);
@@ -145,20 +156,21 @@ export class Population {
           if (ahead > 8 && ahead < 38) desired = Math.min(desired, Math.sqrt(Math.max(0, (ahead - 15) * 5)));
         }
       }
-      const avoid = (obstacleX: number, obstacleZ: number, width: number) => {
+      const avoid = (obstacleX: number, obstacleZ: number, width: number, obstacleY: number) => {
+        if (this.map.kind === 'real' && Math.abs(obstacleY - car.body.position.y) > 2.5) return;
         const offsetX = obstacleX - point.x;
         const offsetZ = obstacleZ - point.z;
         const ahead = offsetX * directionX + offsetZ * directionZ;
         const across = Math.abs(offsetX * directionZ - offsetZ * directionX);
         if (ahead > 0 && ahead < 26 && across < width) desired = Math.min(desired, Math.max(0, (ahead - 7) * 0.8));
       };
-      avoid(player.position.x, player.position.z, 2.7);
-      if (walker) avoid(walker.position.x, walker.position.z, 1.5);
+      avoid(player.position.x, player.position.z, 2.7, player.position.y);
+      if (walker) avoid(walker.position.x, walker.position.z, 1.5, walker.position.y);
       for (const other of this.cars) {
-        if (other !== car && other.active) avoid(other.body.position.x, other.body.position.z, 2.3);
+        if (other !== car && other.active) avoid(other.body.position.x, other.body.position.z, 2.3, other.body.position.y);
       }
       for (const pedestrian of this.pedestrians) {
-        if (pedestrian.crossing) avoid(pedestrian.model.group.position.x, pedestrian.model.group.position.z, 1.8);
+        if (pedestrian.crossing) avoid(pedestrian.model.group.position.x, pedestrian.model.group.position.z, 1.8, pedestrian.body.position.y);
       }
       car.speed = THREE.MathUtils.damp(car.speed, desired, desired < car.speed ? 5 : 1.2, delta);
       car.distance = (car.distance + car.speed * delta) % car.route.length;
@@ -167,7 +179,9 @@ export class Population {
       car.body.velocity.set((next.x - car.body.position.x) / delta, (next.y + 0.82 - car.body.position.y) / delta, (next.z - car.body.position.z) / delta);
       const yawDelta = Math.atan2(Math.sin(next.yaw - car.yaw), Math.cos(next.yaw - car.yaw));
       car.yaw += yawDelta * Math.min(1, delta * 9);
-      car.body.quaternion.setFromEuler(0, car.yaw, 0);
+      const ahead = car.route.sample(car.distance + 2);
+      const pitch = this.map.kind === 'real' ? -Math.atan2(ahead.y - next.y, Math.hypot(ahead.x - next.x, ahead.z - next.z)) : 0;
+      car.body.quaternion.setFromEuler(pitch, car.yaw, 0, 'YXZ');
       car.body.aabbNeedsUpdate = true;
     }
 
@@ -175,14 +189,16 @@ export class Population {
       const group = pedestrian.model.group;
       const point = pedestrian.route.sample(pedestrian.distance);
       const upcoming = pedestrian.route.sample(pedestrian.distance + pedestrian.direction * 3);
-      const insideRoad = (candidate: Point) => this.map.kind === 'grid' && this.map.roads.some(road => Math.abs(candidate.x - road) < 9 || Math.abs(candidate.z - road) < 9);
+      const insideRoad = (candidate: Point) => this.map.kind === 'grid'
+        ? this.map.roads.some(road => Math.abs(candidate.x - road) < 9 || Math.abs(candidate.z - road) < 9)
+        : [...this.roadSegments.at(candidate)].some(road => Math.abs(road.height - point.y) < 2 && nearestOnSegment(candidate, road.a, road.b).distance < road.width / 2);
       pedestrian.crossing = insideRoad(point);
       let moving = true;
       if (!pedestrian.crossing && insideRoad(upcoming)) {
         const axis = Math.abs(upcoming.x - point.x) > Math.abs(upcoming.z - point.z) ? 'x' : 'z';
-        moving = signalAllows(axis, seconds);
+        moving = this.map.kind === 'real' || signalAllows(axis, seconds);
         for (const car of this.cars) {
-          if (car.active && Math.hypot(car.body.position.x - upcoming.x, car.body.position.z - upcoming.z) < 16) moving = false;
+          if (car.active && Math.abs(car.body.position.y - pedestrian.body.position.y) < 2.5 && Math.hypot(car.body.position.x - upcoming.x, car.body.position.z - upcoming.z) < 16) moving = false;
         }
       }
       const playerDistance = Math.hypot(point.x - player.position.x, point.z - player.position.z);
@@ -199,23 +215,28 @@ export class Population {
       pedestrian.body.velocity.set((next.x - pedestrian.body.position.x) / delta, (next.y + 0.65 - pedestrian.body.position.y) / delta, (next.z - pedestrian.body.position.z) / delta);
       group.rotation.y = next.yaw + (pedestrian.direction < 0 ? Math.PI : 0);
       group.visible = Math.hypot(next.x - focus.x, next.z - focus.z) < 125;
+      pedestrian.body.collisionResponse = group.visible || Math.hypot(next.x - player.position.x, next.z - player.position.z) < 10;
+      if (pedestrian.body.collisionResponse) group.visible = true;
       if (group.visible) animatePerson(pedestrian.model, pedestrian.phase, moving);
     }
   }
 
-  render(focus: THREE.Vector3): void {
+  render(focus: THREE.Vector3, parkedCar?: CANNON.Vec3): void {
     this.cars.forEach((car, index) => {
-      const visible = car.active && Math.hypot(car.body.position.x - focus.x, car.body.position.z - focus.z) < 240;
+      const visible = car.active && (Math.hypot(car.body.position.x - focus.x, car.body.position.z - focus.z) < 240 ||
+        Boolean(parkedCar && Math.hypot(car.body.position.x - parkedCar.x, car.body.position.z - parkedCar.z) < 10));
+      car.body.collisionResponse = visible;
       this.transform.position.set(car.body.position.x, car.body.position.y - 0.19, car.body.position.z);
-      this.transform.rotation.set(0, car.yaw, 0);
+      this.transform.quaternion.copy(car.body.quaternion);
       this.transform.scale.setScalar(visible ? 1 : 0);
       this.transform.updateMatrix();
       this.meshes.forEach(mesh => mesh.setMatrixAt(index, this.transform.matrix));
       for (let wheel = 0; wheel < 4; wheel++) {
         const localX = wheel % 2 ? 0.94 : -0.94;
         const localZ = wheel < 2 ? 1.36 : -1.35;
-        this.transform.position.set(car.body.position.x + Math.cos(car.yaw) * localX + Math.sin(car.yaw) * localZ, car.body.position.y - 0.46, car.body.position.z - Math.sin(car.yaw) * localX + Math.cos(car.yaw) * localZ);
-        this.transform.rotation.set(0, car.yaw, 0);
+        const offset = car.body.quaternion.vmult(new CANNON.Vec3(localX, -0.46, localZ));
+        this.transform.position.set(car.body.position.x + offset.x, car.body.position.y + offset.y, car.body.position.z + offset.z);
+        this.transform.quaternion.copy(car.body.quaternion);
         this.transform.rotateX(car.distance / 0.36);
         this.transform.updateMatrix();
         this.wheels.setMatrixAt(index * 4 + wheel, this.transform.matrix);

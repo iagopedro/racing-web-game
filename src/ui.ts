@@ -6,6 +6,9 @@ import type { AudioSystem } from './systems/audio';
 import { district, SANTA_BRISA } from './world/map';
 import type { MapDefinition } from './world/map';
 import { GeoPanel } from './geo/panel';
+import { nearestOnSegment } from './geo/coordinates';
+import { SpatialIndex } from './geo/spatial';
+import type { LocalPoint } from './geo/types';
 
 export interface UIActions { start: () => void; pause: (paused: boolean) => void; quality: (level: string) => void; recover: () => void; camera: () => void }
 
@@ -30,6 +33,7 @@ export class UI {
   private map: MapDefinition;
   private geo: GeoPanel;
   private geographicMinimap?: HTMLCanvasElement;
+  private streetNames = new SpatialIndex<{ a: LocalPoint; b: LocalPoint; name: string }>();
 
   constructor(root: HTMLElement, audio: AudioSystem, input: Input, actions: UIActions, map: MapDefinition = SANTA_BRISA) {
     this.root = root;
@@ -83,7 +87,7 @@ export class UI {
       context.scale(2048 / map.data.size, 2048 / map.data.size);
       context.translate(map.extent, map.extent);
       for (const area of map.data.areas) {
-        context.fillStyle = area.kind === 'water' ? '#487f80' : '#56794e'; context.beginPath();
+        context.fillStyle = area.kind === 'water' ? '#487f80' : area.kind === 'paved' ? '#bcb29a' : '#56794e'; context.beginPath();
         for (const ring of area.polygon) { ring.forEach((point, index) => index ? context.lineTo(point.x, point.z) : context.moveTo(point.x, point.z)); context.closePath(); }
         context.fill('evenodd');
       }
@@ -93,7 +97,13 @@ export class UI {
         context.beginPath();
         road.points.forEach((point, index) => index ? context.lineTo(point.x, point.z) : context.moveTo(point.x, point.z));
         context.stroke();
+        if (road.name !== road.kind && road.kind !== 'waterway') for (let i = 1; i < road.points.length; i++) {
+          const segment = { a: road.points[i - 1], b: road.points[i], name: road.name };
+          this.streetNames.add(segment, [segment.a, segment.b], 60);
+        }
       }
+      context.strokeStyle = '#dca655'; context.lineWidth = 2;
+      context.strokeRect(-map.extent + 1, -map.extent + 1, map.data.size - 2, map.data.size - 2);
     }
     this.icons();
     this.click('start-button', () => { this.started = true; root.classList.add('started'); actions.start(); if (!matchMedia('(pointer: coarse)').matches) this.toast('WASD para andar. E para entrar no carro.'); });
@@ -205,7 +215,14 @@ export class UI {
     if (!this.started) return;
     const speed = Math.round(Math.abs(player.car.speed) * 3.6);
     this.speed.textContent = String(player.driving ? speed : 0).padStart(3, '0');
-    this.location.textContent = this.map.kind === 'real' ? this.map.name : district(player.focus);
+    if (this.map.kind === 'real') {
+      let nearest = 60, name = this.map.name;
+      for (const street of this.streetNames.at(player.focus)) {
+        const distance = nearestOnSegment(player.focus, street.a, street.b).distance;
+        if (distance < nearest) { nearest = distance; name = street.name; }
+      }
+      this.location.textContent = this.map.extent - Math.max(Math.abs(player.focus.x), Math.abs(player.focus.z)) < 15 ? 'Limite do recorte' : name;
+    } else this.location.textContent = district(player.focus);
     this.element('speed-bar').style.width = `${Math.min(100, speed / 1.3)}%`;
     this.element('gear').textContent = !player.driving || speed < 1 ? 'N' : player.car.speed < 0 ? 'R' : String(Math.min(5, 1 + Math.floor(speed / 27)));
     this.element('vehicle-label').textContent = player.driving ? 'BRISA GT / 1986' : 'A PE';

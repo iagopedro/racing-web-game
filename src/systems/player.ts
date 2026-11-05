@@ -6,6 +6,7 @@ import { createCar, createWheel, createPerson, animatePerson, headlightMaterial,
 import type { PersonModel } from '../world/models';
 import type { MapDefinition } from '../world/map';
 import { recoveryPoint, surfaceHeight } from '../world/map';
+import { bodyOverlapsSphere } from '../core/collision';
 
 const WALK_SPEED = 6;
 
@@ -67,11 +68,13 @@ export class Player {
         destination.y = surfaceHeight(this.map, destination.x, destination.z, origin.y + 1) + 0.55;
         if (Math.abs(destination.x) > this.map.extent - 1 || Math.abs(destination.z) > this.map.extent - 1) continue;
         const blocked = this.world.bodies.some(body => {
-          if (body === this.car.body || body === this.walker || body.shapes[0] instanceof CANNON.Plane || body.shapes[0] instanceof CANNON.Heightfield || body.collisionFilterGroup === 2) return false;
+          if (body === this.car.body || body === this.walker || !body.collisionResponse || body.shapes[0] instanceof CANNON.Plane || body.shapes[0] instanceof CANNON.Heightfield) return false;
           if (body.aabbNeedsUpdate) body.updateAABB();
           const bounds = body.aabb;
-          return destination.x > bounds.lowerBound.x - 0.5 && destination.x < bounds.upperBound.x + 0.5 && destination.z > bounds.lowerBound.z - 0.5 && destination.z < bounds.upperBound.z + 0.5 &&
+          const broadOverlap = destination.x > bounds.lowerBound.x - 0.5 && destination.x < bounds.upperBound.x + 0.5 && destination.z > bounds.lowerBound.z - 0.5 && destination.z < bounds.upperBound.z + 0.5 &&
             destination.y + 1.3 > bounds.lowerBound.y && destination.y - 0.5 < bounds.upperBound.y;
+          return broadOverlap && (bodyOverlapsSphere(body, destination, 0.42) ||
+            bodyOverlapsSphere(body, new CANNON.Vec3(destination.x, destination.y + 0.8, destination.z), 0.42));
         });
         if (blocked) continue;
         this.walker.position.copy(destination);
@@ -124,7 +127,7 @@ export class Player {
       wheel.quaternion.copy(transform.quaternion);
     });
     this.person.group.visible = !this.driving && this.transitioning < 0.25;
-    this.person.group.position.set(this.walker.position.x, Math.max(0.02, this.walker.position.y - 0.42), this.walker.position.z);
+    this.person.group.position.set(this.walker.position.x, this.walker.position.y - 0.42, this.walker.position.z);
     this.focus.copy(this.driving ? this.model.position : this.person.group.position);
     this.lights.forEach(light => { light.intensity = night * 55; });
     headlightMaterial.emissiveIntensity = 0.2 + night * 3;

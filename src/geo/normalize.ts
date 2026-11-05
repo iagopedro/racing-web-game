@@ -1,8 +1,12 @@
 import osmtogeojson from 'osmtogeojson';
 import type { Feature, FeatureCollection, Geometry, Position } from 'geojson';
-import { cropLine, cropPolygon, insidePolygon, overlapArea, polygonArea } from './geometry.ts';
+import { cropLine, cropPolygon, overlapArea, polygonArea } from './geometry.ts';
 import { nearestOnSegment, projection, regionBounds, terrainHeight } from './coordinates.ts';
 import type { Building, CityData, LocalPoint, Polygon, RegionRequest, Road, Terrain } from './types.ts';
+import { CITY_VERSION } from './types.ts';
+import { roadWidth } from './roads.ts';
+import { coastlineWater } from './coastline.ts';
+import { SpatialIndex } from './spatial.ts';
 
 export function lengthMeters(value: unknown): number | undefined {
   if (typeof value === 'number') return Number.isFinite(value) && value > 0 ? value : undefined;
@@ -52,20 +56,25 @@ export function normalizeOSM(raw: unknown, request: RegionRequest, terrain: Terr
   const size = request.sizeKm * 1000;
   const { project } = projection(request.center);
   const city: CityData = {
-    version: 1, id, name: request.name, center: request.center, bounds: regionBounds(request.center, size), size,
+    version: CITY_VERSION, id, name: request.name, center: request.center, bounds: regionBounds(request.center, size), size,
     roads: [], buildings: [], areas: [], terrain, spawn: { x: 0, z: 0, y: 0, yaw: 0 }, imagery: [],
     attribution: [{ label: 'OpenStreetMap contributors', url: 'https://www.openstreetmap.org/copyright', license: 'ODbL 1.0' }],
     warnings: [], createdAt: new Date().toISOString(),
   };
   let incomplete = 0;
   let vertices = 0;
+  const coasts: LocalPoint[][] = [];
   for (const feature of features) {
     const tags = feature.properties ?? {};
     if (tags.tainted) { incomplete++; continue; }
     const featureId = String(feature.id);
     if (tags.building && tags.building !== 'no') {
       polygons(feature, project, size).forEach((polygon, index) => {
-        city.buildings.push({ id: `${featureId}/${index}`, polygon, ...buildingHeight(tags, 'osm'), source: 'osm' });
+        city.buildings.push({
+          id: `${featureId}/${index}`, polygon, ...buildingHeight(tags, 'osm'), source: 'osm',
+          name: typeof tags.name === 'string' ? tags.name : undefined,
+          color: typeof tags['building:colour'] === 'string' && /^#[\da-f]{6}$/i.test(tags['building:colour']) ? tags['building:colour'] : undefined,
+        });
         vertices += polygon.reduce((sum, ring) => sum + ring.length, 0);
       });
     } else if (tags.natural === 'water' || tags.water || tags.waterway === 'riverbank' ||
@@ -74,18 +83,26 @@ export function normalizeOSM(raw: unknown, request: RegionRequest, terrain: Terr
         ['wood', 'scrub', 'grassland', 'wetland'].includes(String(tags.natural))) {
       const kind = tags.natural === 'water' || tags.water || tags.waterway === 'riverbank' ? 'water' : 'green';
       polygons(feature, project, size).forEach((polygon, index) => {
-        city.areas.push({ id: `${featureId}/${index}`, kind, polygon });
+        city.areas.push({ id: `${featureId}/${index}`, kind, polygon, name: typeof tags.name === 'string' ? tags.name : undefined });
         vertices += polygon.reduce((sum, ring) => sum + ring.length, 0);
       });
     }
     const geometry = feature.geometry;
+    if (tags.highway && tags.area !== 'no' && (geometry.type === 'Polygon' || geometry.type === 'MultiPolygon')) {
+      polygons(feature, project, size).forEach((polygon, index) => {
+        city.areas.push({ id: `${featureId}/${index}`, kind: 'paved', polygon, name: typeof tags.name === 'string' ? tags.name : undefined });
+        vertices += polygon.reduce((sum, ring) => sum + ring.length, 0);
+      });
+    }
+    if (tags.natural === 'coastline') {
+      const lines = geometry.type === 'LineString' ? [geometry.coordinates] : geometry.type === 'MultiLineString' ? geometry.coordinates :
+        geometry.type === 'Polygon' ? geometry.coordinates : [];
+      coasts.push(...lines.map(line => line.map(point => projected(point, project))));
+    }
     if ((tags.highway || tags.waterway) && (geometry.type === 'LineString' || geometry.type === 'MultiLineString')) {
       const lines = geometry.type === 'LineString' ? [geometry.coordinates] : geometry.coordinates;
       const kind = String(tags.highway ?? tags.waterway);
-      const width = Math.max(1, Math.min(50, lengthMeters(tags.width) ??
-        (tags.waterway ? (kind === 'river' ? 16 : 4) :
-          lengthMeters(tags.lanes) ? lengthMeters(tags.lanes)! * 3.2 :
-            ['motorway', 'trunk', 'primary'].includes(kind) ? 10 : ['footway', 'path', 'cycleway', 'steps'].includes(kind) ? 2 : 6)));
+      const dimensions = roadWidth(tags, lengthMeters);
       const drive = Boolean(tags.highway) && !['no', 'private'].includes(String(tags.access)) &&
         !['no', 'private'].includes(String(tags.motor_vehicle ?? tags.vehicle)) &&
         ['motorway', 'motorway_link', 'trunk', 'trunk_link', 'primary', 'primary_link', 'secondary', 'secondary_link', 'tertiary', 'tertiary_link', 'unclassified', 'residential', 'living_street', 'service', 'road'].includes(kind);
@@ -94,7 +111,8 @@ export function normalizeOSM(raw: unknown, request: RegionRequest, terrain: Terr
         vertices += points.length;
         const road: Road = {
           id: `${featureId}/${index}`, name: typeof tags.name === 'string' ? tags.name : kind,
-          kind: tags.waterway ? 'waterway' : kind, points, heights: [], width,
+          kind: tags.waterway ? 'waterway' : kind, points, heights: [], ...dimensions,
+          surface: typeof tags.surface === 'string' ? tags.surface : undefined,
           drive: drive && !tunnel, walk: ['footway', 'path', 'pedestrian'].includes(kind) && !tunnel && tags.foot !== 'no' && !['private', 'no'].includes(String(tags.access)),
           oneway: tags.oneway === '-1' ? -1 : ['yes', '1', 'true'].includes(String(tags.oneway)) || ((tags.junction === 'roundabout' || kind === 'motorway') && tags.oneway !== 'no') ? 1 : 0,
           layer: Number.isFinite(Number(tags.layer)) ? Number(tags.layer) : 0,
@@ -107,10 +125,15 @@ export function normalizeOSM(raw: unknown, request: RegionRequest, terrain: Terr
       throw new Error(`Recorte denso demais (${vertices} vertices, ${city.buildings.length} edificios, ${city.roads.length} vias). Limites: 300000 vertices, 25000 edificios, 20000 vias e 6000 areas. Reduza a regiao.`);
     }
   }
+  const ocean = coastlineWater(coasts, size);
+  ocean.polygons.forEach((polygon, index) => city.areas.push({ id: `coastline/${index}`, name: 'Oceano / costa OSM', kind: 'water', polygon }));
+  if (ocean.incomplete) city.warnings.push(`${ocean.incomplete} linhas de costa incompletas: agua nao inferida nesses trechos.`);
+  if (!ocean.polygons.length) city.warnings.push('Sem costa fechavel no recorte; oceano nao foi inventado.');
   if (incomplete) city.warnings.push(`${incomplete} geometrias OSM incompletas foram omitidas.`);
   if (city.roads.some(road => road.tunnel)) city.warnings.push('Tuneis identificados, mas nao escavados nem incluidos nas rotas navegaveis.');
   if (city.roads.some(road => road.bridge)) city.warnings.push('Pontes preservam o tracado; altura do tabuleiro e rampas sao aproximadas, nao medidas.');
-  city.warnings.push('Larguras sem tags sao estimadas. Imagens nao determinam fachadas. Oceano sem poligono OSM nao e preenchido automaticamente.');
+  city.warnings.push(`${city.roads.filter(road => road.widthSource === 'estimated').length} larguras viarias estimadas por classe e sentido; ${city.roads.filter(road => road.widthSource === 'lanes').length} derivadas de faixas. Somente width e largura declarada na fonte.`);
+  city.warnings.push('Fachadas e cores sem tags sao ilustrativas, nao reconstrucoes fotograficas.');
   if (!city.buildings.length) city.warnings.push('OSM nao retornou edificios neste recorte.');
   return city;
 }
@@ -169,16 +192,20 @@ export function finishCity(city: CityData): void {
       const point = nearestOnSegment({ x: 0, z: 0 }, a, b);
       if (Math.max(Math.abs(point.x), Math.abs(point.z)) > city.size / 2 - 20) continue;
       const yaw = Math.atan2(b.x - a.x, b.z - a.z) + (road.oneway === -1 ? Math.PI : 0);
+      const length = Math.hypot(b.x - a.x, b.z - a.z);
+      if (Math.abs(road.heights[i] - road.heights[i - 1]) / length > 0.1) continue;
       candidates.push({ x: point.x, z: point.z, y: road.heights[i - 1] + (road.heights[i] - road.heights[i - 1]) * point.t, yaw, distance: point.distance });
     }
   }
   candidates.sort((a, b) => a.distance - b.distance);
+  const obstacles = new SpatialIndex<Building>();
+  city.buildings.filter(building => building.minHeight < 2).forEach(building => obstacles.add(building, building.polygon[0], 5));
   const selected = candidates.find(point => {
-    const probes = [-4, 0, 3].flatMap(along => [-1.4, 0, 1.4].map(across => ({
+    const footprint = [[-4, -1.4], [-4, 1.4], [3, 1.4], [3, -1.4]].map(([along, across]) => ({
       x: point.x + Math.sin(point.yaw) * along + Math.cos(point.yaw) * across,
       z: point.z + Math.cos(point.yaw) * along - Math.sin(point.yaw) * across,
-    })));
-    return !city.buildings.some(building => probes.some(probe => insidePolygon(probe, building.polygon)));
+    }));
+    return ![...obstacles.at(point)].some(building => overlapArea([footprint], building.polygon) > 0.001);
   });
   if (!selected) throw new Error('Nao foi encontrada via dirigivel com espaco para iniciar. Escolha outro centro ou aumente o recorte.');
   const { distance: _distance, ...spawn } = selected;

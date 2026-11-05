@@ -12,9 +12,9 @@ export function overpassQuery(bounds: Bounds): string {
   const [west, south, east, north] = bounds;
   const bbox = `${south},${west},${north},${east}`;
   return `[out:json][timeout:120][maxsize:67108864];(
-    way["highway"](${bbox});
+    nwr["highway"](${bbox});
     nwr["building"]["building"!="no"](${bbox});
-    nwr["natural"~"^(water|wood|scrub|grassland|wetland)$"](${bbox});
+    nwr["natural"~"^(water|wood|scrub|grassland|wetland|coastline)$"](${bbox});
     nwr["landuse"~"^(grass|forest|meadow|recreation_ground|village_green)$"](${bbox});
     nwr["leisure"~"^(park|garden|recreation_ground|nature_reserve)$"](${bbox});
     nwr["waterway"](${bbox});

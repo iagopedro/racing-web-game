@@ -41,7 +41,8 @@ class Batch {
 
 export interface City {
   colliders: CANNON.Body[];
-  update: (seconds: number, night: number, focus: THREE.Vector3) => void;
+  colliderLabels?: Map<number, string>;
+  update: (seconds: number, night: number, focus: THREE.Vector3, parkedCar?: THREE.Vector3) => void;
 }
 
 export function createCity(scene: THREE.Scene, physics: CANNON.World, map: MapDefinition, texture?: THREE.Texture): City {

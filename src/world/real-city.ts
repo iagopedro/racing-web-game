@@ -3,6 +3,7 @@ import * as CANNON from 'cannon-es';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { staticBox } from '../core/physics';
 import { terrainHeight } from '../geo/coordinates';
+import { roadOffsets, roadSegment } from '../geo/roads';
 import type { Building, LocalPoint, Polygon, Terrain } from '../geo/types';
 import type { RealMapDefinition } from './map';
 import type { City } from './city';
@@ -91,49 +92,74 @@ export function terrainGeometry(terrain: Terrain): THREE.BufferGeometry {
 export function terrainBody(terrain: Terrain): CANNON.Body {
   const n = terrain.segments;
   const data = Array.from({ length: n + 1 }, (_, x) => Array.from({ length: n + 1 }, (_, y) => terrain.heights[y * (n + 1) + x]));
-  const body = new CANNON.Body({ mass: 0, shape: new CANNON.Heightfield(data, { elementSize: terrain.size / n }) });
+  const body = new CANNON.Body({ mass: 0, shape: new GroundHeightfield(data, { elementSize: terrain.size / n }) });
   body.position.set(-terrain.size / 2, 0, terrain.size / 2);
   body.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
   body.aabbNeedsUpdate = true;
   return body;
 }
 
-export function buildingBody(building: Building, terrain: Terrain): CANNON.Body {
-  const rings = building.polygon.map(ring => {
-    const points = ring.map(point => new THREE.Vector2(point.x, point.z));
-    if (points.length && points[0].equals(points.at(-1)!)) points.pop();
-    return points;
-  });
-  const triangles = THREE.ShapeUtils.triangulateShape(rings[0], rings.slice(1));
-  const points = rings.flat();
-  const origin = points[0];
-  const y = baseHeight(building, terrain) + building.minHeight;
-  const height = building.height - building.minHeight;
-  const body = new CANNON.Body({ mass: 0, position: new CANNON.Vec3(origin.x, y, origin.y) });
-  for (const triangle of triangles) {
-    let [a, b, c] = triangle.map(index => points[index]);
-    if ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x) < 0) [b, c] = [c, b];
-    const centerX = (a.x + b.x + c.x) / 3, centerZ = (a.y + b.y + c.y) / 3;
-    const vertices = [-height / 2, height / 2].flatMap(level => [a, b, c].map(point => new CANNON.Vec3(point.x - centerX, level, point.y - centerZ)));
+export class GroundHeightfield extends CANNON.Heightfield {
+  override getAabbAtIndex(x: number, y: number, bounds: CANNON.AABB): void {
+    // Cannon uses only diagonal endpoints here, missing short suspension rays
+    // in descending or saddle-shaped cells. All four heights must bound a cell.
+    const heights = [this.data[x][y], this.data[x + 1][y], this.data[x][y + 1], this.data[x + 1][y + 1]];
+    bounds.lowerBound.set(x * this.elementSize, y * this.elementSize, Math.min(...heights));
+    bounds.upperBound.set((x + 1) * this.elementSize, (y + 1) * this.elementSize, Math.max(...heights));
+  }
+}
+
+export function surfaceBody(geometry: THREE.BufferGeometry, depth: number): CANNON.Body {
+  const positions = geometry.getAttribute('position'), indices = geometry.getIndex();
+  const count = indices ? indices.count : positions.count;
+  const origin = new CANNON.Vec3(positions.getX(0), positions.getY(0), positions.getZ(0));
+  const body = new CANNON.Body({ mass: 0, position: origin });
+  for (let i = 0; i < count; i += 3) {
+    let [a, b, c] = [i, i + 1, i + 2].map(value => new THREE.Vector3().fromBufferAttribute(positions, indices ? indices.getX(value) : value));
+    const area = (b.x - a.x) * (c.z - a.z) - (b.z - a.z) * (c.x - a.x);
+    if (Math.abs(area) < 1e-8) continue;
+    if (area < 0) [b, c] = [c, b];
+    const center = a.clone().add(b).add(c).multiplyScalar(1 / 3); center.y -= depth / 2;
+    const vertices = [-depth, 0].flatMap(level => [a, b, c].map(point => new CANNON.Vec3(point.x - center.x, point.y + level - center.y, point.z - center.z)));
     body.addShape(new CANNON.ConvexPolyhedron({ vertices, faces: [[0, 1, 2], [5, 4, 3], [0, 3, 4, 1], [1, 4, 5, 2], [2, 5, 3, 0]] }),
-      new CANNON.Vec3(centerX - origin.x, height / 2, centerZ - origin.y));
+      new CANNON.Vec3(center.x - origin.x, center.y - origin.y, center.z - origin.z));
   }
   return body;
+}
+
+export function buildingBody(building: Building, terrain: Terrain): CANNON.Body {
+  const roof = new THREE.ShapeGeometry(shapeOf(building.polygon));
+  roof.rotateX(-Math.PI / 2);
+  roof.translate(0, baseHeight(building, terrain) + building.height, 0);
+  const body = surfaceBody(roof, building.height - building.minHeight);
+  roof.dispose();
+  return body;
+}
+
+export function bridgeGeometry(road: import('../geo/types').Road, index: number, offsets = roadOffsets(road)): THREE.BufferGeometry {
+  const polygon = roadSegment(road, index, offsets);
+  const corners = polygon[0], positions = corners.flatMap((point, i) => [point.x, road.heights[i < 2 ? index - 1 : index], point.z]);
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setIndex([0, 3, 1, 1, 3, 2]); geometry.computeVertexNormals();
+  return geometry;
 }
 
 export function createRealCity(scene: THREE.Scene, world: CANNON.World, map: RealMapDefinition, texture?: THREE.Texture): City {
   const { data } = map;
   const terrain = data.terrain;
   const colliders: CANNON.Body[] = [];
+  const colliderLabels = new Map<number, string>();
   const ground = terrainBody(terrain);
   ground.material = world.defaultMaterial;
   world.addBody(ground); colliders.push(ground);
+  colliderLabels.set(ground.id, 'terrain');
   const groundMesh = new THREE.Mesh(terrainGeometry(terrain), new THREE.MeshStandardMaterial({ color: texture ? 0xffffff : 0xb4b49a, map: texture ?? null, roughness: 1 }));
   groundMesh.receiveShadow = true; scene.add(groundMesh);
-  const chunks = new Map<string, { group: THREE.Group; bounds: THREE.Box3; parts: Map<number, THREE.BufferGeometry[]>; buildings: Building[]; bodies: CANNON.Body[]; active: boolean }>();
+  const chunks = new Map<string, { group: THREE.Group; bounds: THREE.Box3; collisionBounds: THREE.Box3; parts: Map<number, THREE.BufferGeometry[]>; buildings: Building[]; bodies: CANNON.Body[]; active: boolean }>();
   const chunkAt = (x: number, z: number) => {
     const key = `${Math.floor(x / 128)}:${Math.floor(z / 128)}`;
-    if (!chunks.has(key)) chunks.set(key, { group: new THREE.Group(), bounds: new THREE.Box3(), parts: new Map(), buildings: [], bodies: [], active: false });
+    if (!chunks.has(key)) chunks.set(key, { group: new THREE.Group(), bounds: new THREE.Box3(), collisionBounds: new THREE.Box3(), parts: new Map(), buildings: [], bodies: [], active: false });
     return chunks.get(key)!;
   };
   const add = (geometry: THREE.BufferGeometry, color: number, x: number, z: number) => {
@@ -146,44 +172,22 @@ export function createRealCity(scene: THREE.Scene, world: CANNON.World, map: Rea
   for (const area of data.areas) {
     const geometry = drapedGeometry(area.polygon, terrain, 0.04);
     const point = area.polygon[0][0];
-    add(geometry, area.kind === 'water' ? 0x448f9a : 0x739767, point.x, point.z);
+    add(geometry, area.kind === 'water' ? 0x448f9a : area.kind === 'paved' ? 0xcbbfa6 : 0x739767, point.x, point.z);
   }
   for (const road of data.roads) {
     if (road.tunnel) continue;
+    const offsets = roadOffsets(road);
     for (let i = 1; i < road.points.length; i++) {
       const a = road.points[i - 1], b = road.points[i], length = Math.hypot(b.x - a.x, b.z - a.z);
       if (length < 0.01) continue;
-      const offsetAt = (index: number) => {
-        const point = road.points[index], previous = road.points[Math.max(0, index - 1)], next = road.points[Math.min(road.points.length - 1, index + 1)];
-        const beforeLength = Math.hypot(point.x - previous.x, point.z - previous.z);
-        const afterLength = Math.hypot(next.x - point.x, next.z - point.z);
-        const nx = beforeLength ? (point.z - previous.z) / beforeLength : (b.z - a.z) / length;
-        const nz = beforeLength ? -(point.x - previous.x) / beforeLength : -(b.x - a.x) / length;
-        const mx = nx + (afterLength ? (next.z - point.z) / afterLength : nx);
-        const mz = nz + (afterLength ? -(next.x - point.x) / afterLength : nz);
-        const magnitude = Math.hypot(mx, mz);
-        if (magnitude < 0.01) return { x: nx * road.width / 2, z: nz * road.width / 2 };
-        const factor = Math.min(road.width, road.width / 2 / Math.max(0.1, (mx * nx + mz * nz) / magnitude)) / magnitude;
-        return { x: mx * factor, z: mz * factor };
-      };
-      const startOffset = offsetAt(i - 1), endOffset = offsetAt(i);
-      const corners = [[a.x + startOffset.x, a.z + startOffset.z, i - 1], [a.x - startOffset.x, a.z - startOffset.z, i - 1], [b.x + endOffset.x, b.z + endOffset.z, i], [b.x - endOffset.x, b.z - endOffset.z, i]];
-      const positions = corners.flatMap(([x, z, index]) => [x, (road.bridge ? road.heights[index] : terrainHeight(terrain, x, z)) + 0.07, z]);
-      const geometry = road.bridge ? new THREE.BufferGeometry() : drapedGeometry([[corners[0], corners[1], corners[3], corners[2]].map(([x, z]) => ({ x, z }))], terrain, 0.07);
+      const geometry = road.bridge ? bridgeGeometry(road, i, offsets) : drapedGeometry(roadSegment(road, i, offsets), terrain, 0.025);
       if (road.bridge) {
-        geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-        geometry.setIndex([0, 2, 1, 1, 2, 3]); geometry.computeVertexNormals();
-      }
-      add(geometry, road.kind === 'waterway' ? 0x448f9a : road.drive ? 0x505c60 : 0xbeb9a3, (a.x + b.x) / 2, (a.z + b.z) / 2);
-      if (road.bridge) {
-        const rise = road.heights[i] - road.heights[i - 1];
-        const body = new CANNON.Body({ mass: 0, shape: new CANNON.Box(new CANNON.Vec3(road.width / 2, 0.15, Math.hypot(length, rise) / 2 + 0.05)) });
-        body.position.set((a.x + b.x) / 2, (road.heights[i] + road.heights[i - 1]) / 2 - 0.15, (a.z + b.z) / 2);
-        body.quaternion.setFromEuler(-Math.atan2(rise, length), Math.atan2(b.x - a.x, b.z - a.z), 0, 'YXZ');
+        const body = surfaceBody(geometry, 0.3);
         body.collisionFilterGroup = 2;
-        body.aabbNeedsUpdate = true;
         world.addBody(body); colliders.push(body);
+        colliderLabels.set(body.id, road.id);
       }
+      add(geometry, road.kind === 'waterway' ? 0x448f9a : road.surface === 'paving_stones' || !road.drive ? 0xbeb9a3 : 0x505c60, (a.x + b.x) / 2, (a.z + b.z) / 2);
     }
   }
   for (const building of data.buildings) {
@@ -191,8 +195,18 @@ export function createRealCity(scene: THREE.Scene, world: CANNON.World, map: Rea
     geometry.rotateX(-Math.PI / 2);
     geometry.translate(0, baseHeight(building, terrain) + building.minHeight, 0);
     const point = building.polygon[0][0];
-    add(geometry, building.source === 'osm' ? 0xd6cabb : 0xb5c4c7, point.x, point.z);
-    chunkAt(point.x, point.z).buildings.push(building);
+    const palette = [0xd6cabb, 0xe2c4ac, 0xced4bd, 0xdbc2bb, 0xc4d2d0, 0xd9cfaf];
+    const hash = [...building.id].reduce((value, char) => (Math.imul(value, 31) + char.charCodeAt(0)) >>> 0, 0);
+    add(geometry, building.color ? new THREE.Color(building.color).getHex() : palette[hash % palette.length], point.x, point.z);
+    const roof = new THREE.ShapeGeometry(shapeOf(building.polygon));
+    roof.rotateX(-Math.PI / 2); roof.translate(0, baseHeight(building, terrain) + building.height + 0.015, 0);
+    add(roof, 0x8c8175, point.x, point.z);
+    const chunk = chunkAt(point.x, point.z), base = baseHeight(building, terrain);
+    chunk.buildings.push(building);
+    for (const point of building.polygon[0]) {
+      chunk.collisionBounds.expandByPoint(new THREE.Vector3(point.x, base + building.minHeight, point.z));
+      chunk.collisionBounds.expandByPoint(new THREE.Vector3(point.x, base + building.height, point.z));
+    }
   }
   const material = new Map<number, THREE.MeshStandardMaterial>();
   for (const chunk of chunks.values()) {
@@ -200,37 +214,56 @@ export function createRealCity(scene: THREE.Scene, world: CANNON.World, map: Rea
       const geometry = mergeGeometries(parts);
       parts.forEach(part => part.dispose());
       if (!geometry) throw new Error('Falha ao agrupar geometria da cidade.');
-      if (!material.has(color)) material.set(color, new THREE.MeshStandardMaterial({ color, roughness: 0.9, side: THREE.DoubleSide }));
+      if (!material.has(color)) {
+        const layer = color === 0x505c60 ? 3 : [0xcbbfa6, 0xbeb9a3].includes(color) ? 2 : [0x448f9a, 0x739767, 0x8c8175].includes(color) ? 1 : 0;
+        material.set(color, new THREE.MeshStandardMaterial({
+          color, roughness: 0.9, side: THREE.DoubleSide,
+          polygonOffset: layer > 0, polygonOffsetFactor: -layer, polygonOffsetUnits: -layer,
+        }));
+      }
       const mesh = new THREE.Mesh(geometry, material.get(color));
-      mesh.castShadow = color === 0xd6cabb || color === 0xb5c4c7; mesh.receiveShadow = true;
+      mesh.castShadow = ![0x448f9a, 0x739767, 0xcbbfa6, 0xbeb9a3, 0x505c60].includes(color); mesh.receiveShadow = true;
       chunk.group.add(mesh);
     }
     chunk.parts.clear();
     chunk.bounds.setFromObject(chunk.group);
     scene.add(chunk.group);
   }
-  const top = Math.max(...terrain.heights) + 10;
   const edge = map.extent;
-  colliders.push(
-    staticBox(world, -edge, top / 2, 0, 2, top, edge * 2), staticBox(world, edge, top / 2, 0, 2, top, edge * 2),
-    staticBox(world, 0, top / 2, -edge, edge * 2, top, 2), staticBox(world, 0, top / 2, edge, edge * 2, top, 2),
-  );
-  const update = (_seconds: number, _night: number, focus: THREE.Vector3) => {
+  const barrierMaterial = new THREE.MeshStandardMaterial({ color: 0xdca655, roughness: 0.85 });
+  const segments = Math.ceil(data.size / 30), step = data.size / segments;
+  for (const side of [-1, 1]) for (let index = 0; index < segments; index++) for (const axis of ['x', 'z'] as const) {
+    const start = -edge + index * step, end = start + step, along = (start + end) / 2;
+    const x = axis === 'x' ? side * edge : along, z = axis === 'z' ? side * edge : along;
+    const elevations = [start, along, end].map(value => terrainHeight(terrain, axis === 'x' ? x : value, axis === 'z' ? z : value));
+    const bottom = Math.min(...elevations) - 0.2, top = Math.max(...elevations) + 1.4;
+    const width = axis === 'x' ? 0.6 : step + 0.02, depth = axis === 'z' ? 0.6 : step + 0.02;
+    const body = staticBox(world, x, (bottom + top) / 2, z, width, top - bottom, depth);
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(width, top - bottom, depth), barrierMaterial);
+    mesh.name = 'Limite visivel do recorte'; mesh.position.copy(body.position); mesh.receiveShadow = true;
+    scene.add(mesh); colliders.push(body);
+    colliderLabels.set(body.id, 'boundary');
+  }
+  const update = (_seconds: number, _night: number, focus: THREE.Vector3, parkedCar?: THREE.Vector3) => {
     for (const chunk of chunks.values()) {
       const distance = chunk.bounds.distanceToPoint(focus);
-      chunk.group.visible = distance < 850;
-      const active = distance < 260;
+      const carDistance = parkedCar ? chunk.bounds.distanceToPoint(parkedCar) : Infinity;
+      chunk.group.visible = Math.min(distance, carDistance) < 850;
+      const active = chunk.buildings.length > 0 && Math.min(chunk.collisionBounds.distanceToPoint(focus),
+        parkedCar ? chunk.collisionBounds.distanceToPoint(parkedCar) : Infinity) < 260;
       if (active === chunk.active) continue;
       chunk.active = active;
       if (active) {
-        chunk.bodies = chunk.buildings.map(building => buildingBody(building, terrain));
-        chunk.bodies.forEach(body => world.addBody(body));
+        chunk.bodies = chunk.buildings.map(building => {
+          const body = buildingBody(building, terrain); colliderLabels.set(body.id, building.id); return body;
+        });
+        chunk.bodies.forEach(body => { world.addBody(body); colliders.push(body); });
       } else {
-        chunk.bodies.forEach(body => world.removeBody(body));
+        chunk.bodies.forEach(body => { world.removeBody(body); colliders.splice(colliders.indexOf(body), 1); colliderLabels.delete(body.id); });
         chunk.bodies = [];
       }
     }
   };
   update(0, 0, new THREE.Vector3(map.spawn.x, 0, map.spawn.z));
-  return { colliders, update };
+  return { colliders, colliderLabels, update };
 }

@@ -39,6 +39,7 @@ async function initialize(): Promise<void> {
   const city = createCity(scene, physics, map, texture);
   const day = new Daylight(scene);
   const player = new Player(scene, physics, map);
+  const parkedCar = new THREE.Vector3();
   const population = new Population(scene, physics, map);
   const camera = new CameraRig(physics, renderer.domElement);
   camera.orbit = 0.45;
@@ -84,6 +85,10 @@ async function initialize(): Promise<void> {
 
   const fixedUpdate = (drive: ReturnType<Input['sample']>) => {
     seconds += FIXED_STEP;
+    if (!started && map.kind === 'real') { day.update(FIXED_STEP, player.focus); return; }
+    player.focus.copy(player.driving ? player.car.body.position : player.walker.position);
+    parkedCar.copy(player.car.body.position);
+    city.update(seconds, day.night, player.focus, parkedCar);
     player.update(started ? drive : { throttle: 0, brake: 1, steer: 0, handbrake: false }, FIXED_STEP, camera.yaw + camera.orbit);
     population.update(FIXED_STEP, seconds, player.car.body, player.focus, day.night, player.driving ? undefined : player.walker);
     physics.step(FIXED_STEP);
@@ -110,8 +115,8 @@ async function initialize(): Promise<void> {
       let steps = 0;
       while (accumulator >= FIXED_STEP && steps < 6) { fixedUpdate(drive); accumulator -= FIXED_STEP; steps++; }
       player.sync(day.night);
-      population.render(player.focus);
-      city.update(seconds, day.night, player.focus);
+      population.render(player.focus, player.car.body.position);
+      city.update(seconds, day.night, player.focus, parkedCar.copy(player.car.body.position));
       camera.update(player, delta, started);
       audio.update(player.driving, player.car.speed, drive.throttle);
     }
@@ -120,18 +125,19 @@ async function initialize(): Promise<void> {
   };
   for (let step = 0; step < 90; step++) fixedUpdate({ throttle: 0, brake: 1, steer: 0, handbrake: false });
   player.sync(day.night);
-  population.render(player.focus);
+  population.render(player.focus, player.car.body.position);
   city.update(seconds, day.night, player.focus);
   camera.update(player, 1, false);
   renderer.setAnimationLoop(frame);
 
   if (import.meta.env.DEV) {
     Object.assign(window, { __game: {
-      player, population, day, audio, camera, physics, ui, map,
+      player, population, day, audio, camera, physics, ui, map, city, scene,
       snapshot: () => ({ started, paused, quality, driving: player.driving, speed: player.car.speed, position: player.car.body.position.clone(), hours: day.hours, night: day.night, seconds, fps: Math.round(fps), draws: renderer.info.render.calls, triangles: renderer.info.render.triangles, station: audio.station.name, track: audio.track.name, audioState: audio.context?.state, audioLevel: audio.level, traffic: population.cars.filter(car => car.active).length, pedestrians: population.pedestrians.length }),
-      advance: (steps: number, drive = { throttle: 0, brake: 0, steer: 0, handbrake: false }) => {
+      advance: (steps: number, drive = { throttle: 0, brake: 0, steer: 0, handbrake: false }, renderFrame = true) => {
         for (let step = 0; step < Math.min(steps, 36000); step++) fixedUpdate(drive);
-        player.sync(day.night); population.render(player.focus); city.update(seconds, day.night, player.focus); camera.update(player, 1, started); ui.update(player, day, camera.yaw); renderer.render(scene, camera.camera);
+        player.sync(day.night); population.render(player.focus, player.car.body.position); city.update(seconds, day.night, player.focus, parkedCar.copy(player.car.body.position));
+        if (renderFrame) { camera.update(player, 1, started); ui.update(player, day, camera.yaw); renderer.render(scene, camera.camera); }
       },
       pixels: () => {
         const target = new THREE.WebGLRenderTarget(64, 64);

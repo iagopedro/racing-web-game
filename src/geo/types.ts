@@ -1,4 +1,5 @@
 export interface GeoPoint { lon: number; lat: number }
+export const CITY_VERSION = 2;
 export interface LocalPoint { x: number; z: number }
 export type Bounds = [west: number, south: number, east: number, north: number];
 export type Ring = LocalPoint[];
@@ -19,6 +20,8 @@ export interface Road {
   points: LocalPoint[];
   heights: number[];
   width: number;
+  widthSource: 'tag' | 'lanes' | 'estimated';
+  surface?: string;
   oneway: -1 | 0 | 1;
   layer: number;
   bridge: boolean;
@@ -33,14 +36,18 @@ export interface Building {
   minHeight: number;
   heightSource: 'height' | 'levels' | 'estimated' | 'ml';
   source: 'osm' | 'microsoft';
+  name?: string;
+  color?: string;
 }
-export interface LandArea { id: string; kind: 'green' | 'water'; polygon: Polygon }
+export interface LandArea { id: string; name?: string; kind: 'green' | 'water' | 'paved'; polygon: Polygon }
 export interface Terrain {
   segments: number;
   size: number;
   heights: number[];
   datum: number;
   source: 'copernicus' | 'flat';
+  processing?: 'urban-ground';
+  rawHeights?: number[];
 }
 export interface ImageryReference {
   source: 'OpenAerialMap' | 'Sentinel-2';
@@ -53,7 +60,7 @@ export interface ImageryReference {
 export const COPERNICUS_NOTICE = 'produced using Copernicus WorldDEM-30 \u00a9 DLR e.V. 2010-2014 and \u00a9 Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved';
 export interface Attribution { label: string; url: string; license: string; notice?: string }
 export interface CityData {
-  version: 1;
+  version: typeof CITY_VERSION;
   id: string;
   name: string;
   center: GeoPoint;

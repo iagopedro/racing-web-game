@@ -45,6 +45,7 @@ export class CameraRig {
     const from = new CANNON.Vec3(this.target.x, this.target.y, this.target.z);
     const to = new CANNON.Vec3(this.position.x, this.position.y, this.position.z);
     const carResponse = player.car.body.collisionResponse;
+    const walkerResponse = player.walker.collisionResponse;
     player.car.body.collisionResponse = false;
     player.walker.collisionResponse = false;
     this.ray.reset();
@@ -53,7 +54,7 @@ export class CameraRig {
       this.position.lerpVectors(this.target, this.position, fraction);
     }
     player.car.body.collisionResponse = carResponse;
-    player.walker.collisionResponse = true;
+    player.walker.collisionResponse = walkerResponse;
     this.camera.position.lerp(this.position, this.initialized ? 1 - Math.exp(-delta * 7) : 1);
     this.initialized = true;
     this.camera.lookAt(this.target);

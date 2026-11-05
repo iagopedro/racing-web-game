@@ -32,11 +32,13 @@ Reinicie o Vite caso ele ja estivesse aberto antes da criacao de `vite.config.ts
 
 1. Informe o nome e o centro por latitude/longitude WGS84. O formulario inicia em **Recife Antigo**, latitude `-8.0631`, longitude `-34.8712`.
 2. Escolha um recorte quadrado de **0.2 a 5 km de lado**. Comece com 1 km; 5 km pode conter milhares de edificios.
-3. Mantenha o relevo Copernicus habilitado. Desabilita-lo e uma escolha explicita por terreno plano, registrada nos avisos.
+3. O relevo Copernicus habilitado usa **filtragem urbana aproximada**, para nao transformar telhados em rampas. Desabilita-lo escolhe terreno plano, registrado nos avisos.
 4. Opcionalmente habilite footprints Microsoft, referencias de imagens e/ou textura Sentinel-2.
 5. Clique em **Gerar e abrir cidade**. A primeira geracao depende da rede e pode levar minutos. A partida reinicia ao trocar de cidade.
 
 Os recortes normalizados e as respostas OSM reutilizaveis ficam em `.geo-cache/`, fora do Git. O cache de geracao dura 24 horas; **Atualizar fontes** ignora esse prazo. Uma URL `?city=<id>` reabre o recorte salvo mesmo apos esse prazo, sem consultar os provedores. O servico local precisa estar ativo para servi-lo; a URL nao transfere o cache para outro computador. **Abrir Santa Brisa offline** volta ao mapa local sem requisicoes geograficas.
+
+O contrato atual e a **versao 2**. Recortes da primeira implementacao sao rejeitados com mensagem para gerar novamente: seus dados nao incluem as correcoes de terreno, larguras e areas de circulacao. As chaves de cache incluem a versao do pipeline.
 
 ### Busca de cidades por nome
 
@@ -53,9 +55,9 @@ Use **Buscar cidade** e selecione o resultado; ajuste as coordenadas se quiser u
 
 | Fonte | Integracao | Limites e atribuicao |
 | --- | --- | --- |
-| [OpenStreetMap / Overpass](https://wiki.openstreetmap.org/wiki/Overpass_API) | Ruas curvas, cruzamentos, rotatorias, edificios, multipoligonos com patios, parques, rios e agua | ODbL 1.0; atribuicao permanente. Uma consulta por geracao; erros 502/503/504 do endpoint padrao permitem uma tentativa no espelho Kumi, mas 429 nao gera retry. |
+| [OpenStreetMap / Overpass](https://wiki.openstreetmap.org/wiki/Overpass_API) | Ruas curvas, cruzamentos, rotatorias, edificios, multipoligonos com patios, pracas pavimentadas, parques, rios e costa | ODbL 1.0; atribuicao permanente. Uma consulta por geracao; erros 502/503/504 do endpoint padrao permitem uma tentativa no espelho Kumi, mas 429 nao gera retry. |
 | [Microsoft Global ML Building Footprints](https://github.com/microsoft/GlobalMLBuildingFootprints) | Catalogo por quadkey, leitura streaming de GeoJSONL gzip, recorte espacial e complemento de edificios ausentes | CDLA Permissive 2.0; OSM tem prioridade. Sobreposicao >15% da menor area descarta o footprint ML. Alturas positivas sao estimativas ML; `-1` e ausencia. Downloads limitados a 128 MB comprimidos / 768 MB descompactados por tile. |
-| [Copernicus DEM GLO-30 / AWS](https://registry.opendata.aws/copernicus-dem/) | Leitura parcial HTTP Range de COGs, mosaico de tiles e amostragem de relevo a aproximadamente 30 m | DSM, nao DTM: inclui vegetacao e construcoes. Elevacao original EGM2008; uma origem vertical local e subtraida e preservada em `terrain.datum`. NoData/falhas abortam o relevo solicitado, nunca o substituem silenciosamente por um plano. |
+| [Copernicus DEM GLO-30 / AWS](https://registry.opendata.aws/copernicus-dem/) | Leitura parcial HTTP Range de COGs, mosaico de tiles, amostragem ~30 m e filtragem urbana | DSM, nao DTM. O piso e uma aproximacao filtrada; `terrain.rawHeights` preserva as amostras brutas e `terrain.datum` a origem vertical EGM2008. NoData/falhas abortam o relevo solicitado, nunca o substituem silenciosamente por um plano. |
 | [OpenAerialMap](https://docs.openaerialmap.org/api/api/) | Busca de imagens por bounding box, datas, licenca e links de referencia | Cobertura local, nao global. Nenhuma imagem e um resultado explicito. Consulte a licenca/atribuicao da imagem antes de redistribui-la. |
 | [Copernicus Sentinel-2 / Planetary Computer](https://planetarycomputer.microsoft.com/dataset/sentinel-2-l2a) | Busca STAC por recorte, ate 3 cenas com cobertura de nuvens <20%, referencias e textura RGB opcional | Textura reprojetada em EPSG:4326, recortada ao mesmo bbox e cacheada como PNG 1024 x 1024. Resolucao nativa RGB ~10 m, sem classificacao automatica; nao equivale a fotografia de fachadas. |
 
@@ -72,11 +74,30 @@ Consulte a [licenca Copernicus DEM](https://dataspace.copernicus.eu/explore-data
 - `src/geo/types.ts` define o contrato independente do renderizador. O servico valida nome, centro, opcoes e tamanho, consulta as fontes, normaliza e grava JSON atomicamente. Uma geracao por vez; cancelamento, timeout de 9 minutos e limites de resposta evitam trabalho ilimitado.
 - Projecao local equiretangular com raios WGS84 na latitude central: **X leste, Z sul, Y elevacao; 1 unidade = 1 metro**. Adequada a recortes pequenos, nao a uso cadastral. Latitudes suportadas: -75 a 75 graus; recortes cruzando o antimeridiano sao rejeitados.
 - Ruas sao polilinhas reais, nao uma grade inventada. Recorte de linhas nao fecha vias abertas. Poligonos preservam concavidades e aneis internos. Altura de edificio usa `height`, depois `building:levels * 3`, depois estimativa explicita de 9 m; `min_height` e respeitado. Valores extremos sao limitados a 1500 m.
-- Terreno visual, heightfield fisico e amostragem compartilham triangulacao. As superficies de ruas/areas sao recortadas nesses triangulos para nao atravessarem o relevo. Edificios usam extrusoes e colisores em prismas triangulares, sem bloquear patios com caixas envolventes.
-- Malhas sao agrupadas em setores de 128 m, com descarte por distancia e colisores de edificios ativados perto do jogador. O minimapa e pre-renderizado a partir dos mesmos dados. O recorte inteiro fica em memoria; nao ha streaming mundial. Regioes excessivamente densas sao recusadas com orientacao para reduzir o recorte.
-- Inicio e recuperacao usam uma via dirigivel com verificacao de espaco. NPCs usam ciclos conectados das vias, respeitando sentido unico; sem ciclo nao sao inventadas ligacoes. Pedestres circulam apenas nas vias pedonais mapeadas. Faixas, regras de preferencia e semaforos reais ainda nao sao simulados.
-- Pontes mantem o tracado, mas tabuleiros/rampas usam alturas aproximadas. Tuneis sao identificados e excluidos da navegacao, sem escavacao. Larguras sem tags sao estimadas. Agua e vegetacao sao representacoes visuais; nao ha hidrodinamica, natacao ou classificacao ML de imagens. Oceano sem poligono OSM nao recebe contorno inventado.
-- O DEM nao remove telhados nem vegetacao, e uma textura nao altera a geometria. Uma reconstrucao reconhecivel nao e um levantamento de engenharia ou uma replica fotogrametrica.
+- Larguras usam `width`/`width:carriageway`, depois numero de faixas valido, depois classe/sentido da via. `widthSource` diferencia largura declarada, derivada e estimada. Uma rua nao e alargada arbitrariamente para acomodar a fisica; trechos pedonais continuam distintos de vias para carros.
+- Terreno visual, heightfield fisico e amostragem compartilham triangulacao. A filtragem usa abertura morfologica de 5 x 5 amostras e tres convolucoes 3 x 3; preserva tendencias amplas, mas nao recupera um DTM medido. Superficies viarias sao recortadas nos triangulos do piso. Extrusoes e colisores preservam concavidades/patios.
+- Os raios de suspensao/camera usam intersecao de terreno que inclui as bordas compartilhadas. Os limites de celula consideram as quatro alturas, nao somente os extremos diagonais: isso evita perder contato com o piso em celulas descendentes ou em sela.
+- Malhas sao agrupadas em setores de 128 m. Colisores sao ativados **antes** do passo fisico e mantidos tanto perto do jogador quanto do carro estacionado. O minimapa usa os mesmos dados e o HUD mostra a rua mais proxima. O recorte inteiro fica em memoria; nao ha streaming mundial.
+- Inicio/recuperacao verificam a area do carro e do personagem contra os footprints, nao apenas pontos isolados. A saida do carro testa as formas fisicas reais, sem bloquear patios apenas por estarem dentro de uma AABB. Na tela de boas-vindas real, o jogador nao desliza enquanto espera.
+- NPCs usam ciclos conectados das vias, sentido unico e deslocamento para a faixa; trajetos que invadem edificios sao descartados. Obstaculos em niveis diferentes nao bloqueiam a fila. Pedestres usam vias pedonais e reconhecem cruzamentos com ruas. Visibilidade e resposta de colisao acompanham-se. Preferencias e semaforos reais ainda nao sao simulados.
+- Pontes mantem o tracado, mas alturas continuam aproximadas. O colisor do tabuleiro deriva dos mesmos triangulos visiveis, inclusive em curvas. Tuneis permanecem excluidos da navegacao. Os limites do recorte possuem barreiras visiveis e indicacao no HUD, nao paredes invisiveis.
+- A costa OSM e unida por seus extremos e fechada no limite geografico, preservando ilhas. Fragmentos incompletos geram avisos, sem fechamento inventado em terra. Agua e vegetacao ainda sao representacoes visuais, sem hidrodinamica, natacao ou classificacao ML de imagens.
+- A textura de satelite nao cria fachadas. Cores sem tags, telhados simplificados e alturas ausentes sao ilustrativos. A aplicacao continua sendo um **prototipo geografico low-poly**, nao uma replica visual do Recife nem um levantamento de engenharia.
+
+### Revisao de consistencia
+
+A primeira entrega tinha testes de aceleracao e pixels, mas isso nao comprovava continuidade do piso ou fidelidade espacial. A revisao acrescentou regressao para:
+
+| Falha encontrada | Verificacao adicionada |
+| --- | --- |
+| Suspensao perdia contato e o chassis encalhava em ruas visualmente livres | Raios curtos em terrenos descendentes/em sela e nas diagonais; direcao fisica sustentada em ruas reais |
+| DSM criava rampas de ate 35.8% no centro do Recife | Comparacao de inclinacoes brutas/filtradas, preservacao das amostras e teste de terreno inclinado |
+| Pracas pavimentadas eram descartadas e faltava o litoral | Poligonos de circulacao, costa fragmentada, ilhas, referencias de terra/agua e nomes reais |
+| Tabuleiro curvo e colisor tinham contornos diferentes | Centenas de raios comparando exatamente malha e corpo nas bordas das pontes |
+| Saida bloqueada por AABB e obstaculos descarregados perto do carro estacionado | Entrada/saida dentro de patio, limites visiveis e ativacao de setores |
+| NPCs no eixo central, bloqueio entre niveis e colisores ocultos | Posicao na faixa, obstaculos elevados, rotas degeneradas e paridade entre visibilidade/colisao |
+
+No recorte de 5 km usado na revisao, a inclinacao maxima amostrada das vias terrestres caiu de 35.8% para 9.6%. Isso e uma medida de consistencia de jogabilidade, **nao prova de exatidao altimetrica**. A fidelidade visual de fachadas, monumentos, sinalizacao e mobiliario continua incompleta.
 
 API local: `GET /api/geo/health`, `GET /api/geo/search?q=...`, `POST /api/geo/maps[?refresh=1]`, `GET /api/geo/maps/<id>`. A geracao recebe `{ name, center: { lat, lon }, sizeKm, elevation, microsoft, imagery, texture? }` e retorna `{ id, warnings }`. Nao exponha esse servico na internet sem autenticar, limitar uso global, gerenciar armazenamento e adaptar a implantacao.
 
@@ -180,6 +201,16 @@ O teste usa `http://127.0.0.1:5173`; a variavel `TEST_URL` permite outra porta. 
 Os testes de simulacao verificam suspensao, aceleracao, frenagem, re, velocidade maxima, colisao com parede, sinais sem conflito, continuidade de rotas, tres minutos simulados de trafego, sincronizacao entre rota e corpo, reacao a obstaculos, ciclo completo de dia/noite e entrada/saida.
 
 Os testes geograficos usam fixtures deterministicas sem rede: coordenadas em metros, limites, recorte, multipoligonos/patios, alturas, deduplicacao OSM/ML, rotas sem atalhos inventados, correspondencia entre terreno visual/fisico, conduzir/entrar/sair em terreno elevado, cache e erros de fontes. `test:geo-browser` verifica selecao de cidade, navegacao, atribuicao, avisos e layout desktop/mobile. Para adicionar um smoke test de um recorte Copernicus ja gerado, defina `REAL_CITY_ID` com seu id e execute o mesmo comando. Capturas ficam em `test-results/`.
+
+Para a regressao mais rigorosa com dados reais, gere 5 km centrados em `-8.0631, -34.8712`, com relevo habilitado, e execute:
+
+```powershell
+$env:TEST_URL = 'http://127.0.0.1:5174'
+$env:REAL_CITY_ID = '<id do recorte versao 2>'
+npm run test:recife
+```
+
+Esse teste verifica referencias de terra/agua, preservacao do Patio de Sao Pedro, inclinacoes, ausencia de deriva antes de iniciar, 150 m de direcao fisica em cada uma de tres vias (Alfredo Lisboa, Riachuelo e Dantas Barreto), entrada/saida e mais de 55 m de caminhada na Rua do Bom Jesus. Para isolar a continuidade do piso, a colisao com NPCs e desabilitada somente nessa etapa de direcao; a interacao com a populacao e verificada nas suites de simulacao. A visao aerea de diagnostico desativa a neblina apenas para a captura do teste.
 
 O teste Playwright verifica pixels nao vazios, aceleracao e frenagem por teclado, saida segura, radio com sinal real de audio, cameras, pausa, ajustes, diferenca visual entre dia/noite, limite do mapa, estabilidade por mais de tres minutos simulados e direcao por toque. Capturas ficam em `test-results/`, incluindo desktop, celular vertical e horizontal. O acesso `window.__game` existe apenas no servidor de desenvolvimento, para diagnostico e testes; nao e incluido na versao de producao.
 

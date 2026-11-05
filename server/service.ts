@@ -4,7 +4,8 @@ import { resolve, join } from 'node:path';
 import { flatTerrain, regionBounds } from '../src/geo/coordinates.ts';
 import { addMicrosoft, finishCity, normalizeOSM } from '../src/geo/normalize.ts';
 import type { CityData, RegionRequest } from '../src/geo/types.ts';
-import { COPERNICUS_NOTICE } from '../src/geo/types.ts';
+import { CITY_VERSION, COPERNICUS_NOTICE } from '../src/geo/types.ts';
+import { urbanGround } from '../src/geo/terrain.ts';
 import * as providers from './providers.ts';
 import { json, list, record } from './network.ts';
 
@@ -45,23 +46,23 @@ export class GeoService {
 
   async generate(request: RegionRequest, signal: AbortSignal, refresh = false): Promise<CityData> {
     const bounds = regionBounds(request.center, request.sizeKm * 1000);
-    const id = createHash('sha256').update(JSON.stringify({ pipeline: 1, request })).digest('hex').slice(0, 32);
+    const id = createHash('sha256').update(JSON.stringify({ pipeline: CITY_VERSION, request })).digest('hex').slice(0, 32);
     if (!refresh) {
       const cached = await this.cache.read<CityData>(id, 24 * 60 * 60 * 1000);
-      if (cached) return cached;
+      if (cached?.version === CITY_VERSION) return cached;
     }
     if (this.busy) throw new Error('Uma regiao ja esta sendo gerada. Aguarde antes de tentar novamente.');
     this.busy = true;
     try {
-      const osmKey = `osm-${createHash('sha256').update(JSON.stringify([bounds, process.env.OVERPASS_URL ?? 'default'])).digest('hex')}`;
+      const osmKey = `osm-${createHash('sha256').update(JSON.stringify([CITY_VERSION, bounds, process.env.OVERPASS_URL ?? 'default'])).digest('hex')}`;
       const stored = refresh ? undefined : await this.cache.read<unknown>(osmKey, 24 * 60 * 60 * 1000);
       const raw = stored ?? await this.sources.osm(bounds, signal);
       if (!stored && raw && typeof raw === 'object' && 'elements' in raw && Array.isArray(raw.elements) && !('remark' in raw)) await this.cache.write(osmKey, raw);
-      const terrain = request.elevation ? await this.sources.elevation(request.center, request.sizeKm * 1000, signal) : flatTerrain(request.sizeKm * 1000);
+      const terrain = request.elevation ? urbanGround(await this.sources.elevation(request.center, request.sizeKm * 1000, signal)) : flatTerrain(request.sizeKm * 1000);
       const city = normalizeOSM(raw, request, terrain, id);
       if (request.elevation) {
         city.attribution.push({ label: 'Copernicus DEM GLO-30 / Sinergise', url: 'https://registry.opendata.aws/copernicus-dem/', license: 'Copernicus DEM license', notice: COPERNICUS_NOTICE });
-        city.warnings.push('Copernicus GLO-30 e DSM (~30 m), nao terreno nu. Vegetacao e telhados afetam o relevo; datum vertical EGM2008.');
+        city.warnings.push('Piso urbano aproximado: DSM Copernicus filtrado para reduzir telhados e vegetacao; nao e DTM medido. Amostras brutas preservadas em terrain.rawHeights; datum EGM2008.');
       } else city.warnings.push('Modo plano escolhido: elevacao real NAO carregada.');
       const optional = async (label: string, work: () => Promise<void>) => {
         try { await work(); }

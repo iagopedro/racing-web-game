@@ -1,10 +1,11 @@
 import * as CANNON from 'cannon-es';
 import type { MapDefinition } from '../world/map';
+import { DrivingWorld } from './terrain-ray';
 
 export const FIXED_STEP = 1 / 60;
 
 export function createPhysics(flatFloor = true): CANNON.World {
-  const world = new CANNON.World({ gravity: new CANNON.Vec3(0, -9.82, 0), allowSleep: true });
+  const world = new DrivingWorld({ gravity: new CANNON.Vec3(0, -9.82, 0), allowSleep: true });
   world.broadphase = new CANNON.SAPBroadphase(world);
   (world.solver as CANNON.GSSolver).iterations = 12;
   world.defaultContactMaterial.friction = 0.3;

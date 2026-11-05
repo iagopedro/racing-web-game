@@ -1,5 +1,6 @@
 import type { CityData } from '../geo/types';
-import { nearestOnSegment, terrainHeight } from '../geo/coordinates';
+import { terrainHeight } from '../geo/coordinates';
+import { bridgeHeight } from '../geo/roads';
 
 export interface Point { x: number; z: number }
 export interface Block { x: number; z: number; row: number; column: number; park: boolean }
@@ -43,15 +44,8 @@ export function surfaceHeight(map: MapDefinition, x: number, z: number, maxY = I
   let height = groundHeight(map, x, z);
   if (map.kind === 'real') for (const road of map.data.roads) {
     if (!road.bridge || road.tunnel) continue;
-    let distance = Infinity, deckHeight = height;
-    for (let i = 1; i < road.points.length; i++) {
-      const nearest = nearestOnSegment({ x, z }, road.points[i - 1], road.points[i]);
-      if (nearest.distance < distance) {
-        distance = nearest.distance;
-        deckHeight = road.heights[i - 1] + (road.heights[i] - road.heights[i - 1]) * nearest.t;
-      }
-    }
-    if (distance <= road.width / 2 && deckHeight <= maxY) height = Math.max(height, deckHeight);
+    const deckHeight = bridgeHeight(road, x, z);
+    if (deckHeight !== undefined && deckHeight <= maxY) height = Math.max(height, deckHeight);
   }
   return height;
 }
