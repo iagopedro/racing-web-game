@@ -37,11 +37,27 @@ export function addBoundaries(world: CANNON.World, map: MapDefinition): void {
 
 export interface DriveInput { throttle: number; brake: number; steer: number; handbrake: boolean }
 
+export type DriveType = 'fwd' | 'rwd' | 'awd';
+export const DRIVE_TYPES: readonly DriveType[] = ['fwd', 'rwd', 'awd'];
+export const DEFAULT_DRIVE_TYPE: DriveType = 'fwd';
+
+export function isDriveType(value: unknown): value is DriveType {
+  return typeof value === 'string' && (DRIVE_TYPES as readonly string[]).includes(value);
+}
+
+// Share of total engine force per wheel; wheels 0-1 are front, 2-3 are rear.
+function driveShare(type: DriveType, wheel: number): number {
+  const front = wheel < 2;
+  if (type === 'awd') return 0.5;
+  return (type === 'fwd') === front ? 1 : 0;
+}
+
 export class CarPhysics {
   readonly body: CANNON.Body;
   readonly vehicle: CANNON.RaycastVehicle;
   steering = 0;
   engine = 0;
+  driveType: DriveType = DEFAULT_DRIVE_TYPE;
   private forward = new CANNON.Vec3();
   private static readonly axis = new CANNON.Vec3(0, 0, 1);
 
@@ -80,7 +96,7 @@ export class CarPhysics {
     const force = opposing || limited ? 0 : -this.engine * (this.engine < 0 ? 1900 : 3600);
     for (let wheel = 0; wheel < 4; wheel++) {
       this.vehicle.setSteeringValue(wheel < 2 ? this.steering : 0, wheel);
-      this.vehicle.applyEngineForce(wheel >= 2 ? force : 0, wheel);
+      this.vehicle.applyEngineForce(force * driveShare(this.driveType, wheel), wheel);
       this.vehicle.setBrake(input.handbrake && wheel >= 2 ? 110 : (opposing ? 50 : input.brake * 65) + (Math.abs(input.throttle) < 0.01 ? 2 : 0), wheel);
       this.vehicle.wheelInfos[wheel].frictionSlip = input.handbrake && wheel >= 2 ? 1.5 : 3.8;
     }

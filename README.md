@@ -122,13 +122,13 @@ Em telas de toque, use as setas e o botao de entrada/saida. Camera e radio tambe
 
 Gamepads com mapeamento padrao: analogico esquerdo para direcao, RT/LT para acelerar/frear e re, A para entrar/sair, B para freio de mao, X para camera, Y para estacao, Start para pausa. A implementacao esta presente, mas nao foi validada com hardware fisico nesta entrega.
 
-O menu permite alterar volume, qualidade grafica e velocidade do tempo. **Reposicionar carro** recupera um veiculo preso ou capotado na via proxima. Volume, qualidade e estado do radio sao salvos localmente; o estado do mundo nao e salvo. Ao perder visibilidade, a pagina pausa a simulacao e o audio.
+O menu permite alterar volume, qualidade grafica, tipo de tracao do carro (dianteira, traseira ou integral) e velocidade do tempo. **Reposicionar carro** recupera um veiculo preso ou capotado na via proxima. Volume, qualidade, tracao e estado do radio sao salvos localmente; o estado do mundo nao e salvo. Ao perder visibilidade, a pagina pausa a simulacao e o audio.
 
 ## Experiencia Implementada
 
 - Cidade de aproximadamente 630 x 630 metros, 25 quarteiroes e uma malha conectada de ruas com cruzamentos, faixas, calcadas e semaforos.
 - Centro com edificios mais altos, Vila Aurora, Jardins, Distrito das Artes, parques e Orla do Sol. Torre central, comercio e letreiro da cidade como referencias.
-- Carro com chassis dinamico, quatro rodas com suspensao raycast, tracao traseira, direcao progressiva dependente da velocidade, freios, re e freio de mao. Limite de aproximadamente 130 km/h e 32 km/h em re.
+- Carro com chassis dinamico, quatro rodas com suspensao raycast, tracao dianteira por padrao (traseira ou integral selecionavel nos ajustes), direcao progressiva dependente da velocidade, freios, re e freio de mao. Limite de aproximadamente 130 km/h e 32 km/h em re.
 - Colisoes com edificios, limites do mapa, fonte central, trafego e pedestres. A camera consulta a fisica para evitar atravessar obstaculos.
 - Personagem controlavel a pe, verificacao de proximidade para entrar, escolha de um lado livre para sair e transicao visual curta.
 - Ate 30 carros em rotas fechadas, incluindo circuitos que atravessam mais de um quarteirao. Reducao de velocidade nos sinais, distancia de seguranca, reacao ao jogador e parada apos contato.

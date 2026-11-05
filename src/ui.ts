@@ -9,8 +9,10 @@ import { GeoPanel } from './geo/panel';
 import { nearestOnSegment } from './geo/coordinates';
 import { SpatialIndex } from './geo/spatial';
 import type { LocalPoint } from './geo/types';
+import { DEFAULT_DRIVE_TYPE, isDriveType } from './core/physics';
+import type { DriveType } from './core/physics';
 
-export interface UIActions { start: () => void; pause: (paused: boolean) => void; quality: (level: string) => void; recover: () => void; camera: () => void }
+export interface UIActions { start: () => void; pause: (paused: boolean) => void; quality: (level: string) => void; drive: (type: DriveType) => void; recover: () => void; camera: () => void }
 
 export class UI {
   private root: HTMLElement;
@@ -62,7 +64,7 @@ export class UI {
         <div id="transition" class="transition"></div>
         <div class="touch-controls in-game"><div class="touch-steering"><button data-hold="KeyA" aria-label="Virar a esquerda"><i data-lucide="chevron-left"></i></button><button data-hold="KeyD" aria-label="Virar a direita"><i data-lucide="chevron-right"></i></button></div><div class="touch-pedals"><button data-hold="KeyS" aria-label="Frear e marcha a re"><i data-lucide="chevron-down"></i></button><button data-hold="KeyW" aria-label="Acelerar"><i data-lucide="chevron-up"></i></button></div></div>
       </div>
-      <dialog id="settings-dialog" aria-labelledby="settings-title"><div class="dialog-header"><div><span class="eyebrow">SANTA BRISA</span><h2 id="settings-title">Uma pausa.</h2></div><button class="icon-button close-dialog" aria-label="Fechar ajustes"><i data-lucide="x"></i></button></div><div class="settings-fields"><label for="volume">Volume do r&aacute;dio <output id="volume-value">38%</output></label><input id="volume" type="range" min="0" max="100" value="38"><label for="quality">Qualidade visual</label><select id="quality"><option value="low">Leve</option><option value="medium" selected>Equilibrada</option><option value="high">Alta</option></select><label for="time-rate">Passagem do tempo</label><select id="time-rate"><option value="120">Um dia em 12 minutos</option><option value="300">Um dia em 4 min 48 s</option><option value="600">Um dia em 2 min 24 s</option></select><label class="toggle-label" for="radio-toggle">R&aacute;dio ligado<input type="checkbox" id="radio-toggle" checked></label></div><div class="dialog-actions"><button class="secondary-button" id="recover-button"><i data-lucide="rotate-ccw"></i> Reposicionar carro</button><button class="start-button close-dialog"><i data-lucide="play"></i> Continuar</button></div></dialog>
+      <dialog id="settings-dialog" aria-labelledby="settings-title"><div class="dialog-header"><div><span class="eyebrow">SANTA BRISA</span><h2 id="settings-title">Uma pausa.</h2></div><button class="icon-button close-dialog" aria-label="Fechar ajustes"><i data-lucide="x"></i></button></div><div class="settings-fields"><label for="volume">Volume do r&aacute;dio <output id="volume-value">38%</output></label><input id="volume" type="range" min="0" max="100" value="38"><label for="quality">Qualidade visual</label><select id="quality"><option value="low">Leve</option><option value="medium" selected>Equilibrada</option><option value="high">Alta</option></select><label for="drive-type">Tra&ccedil;&atilde;o do carro</label><select id="drive-type"><option value="fwd" selected>Dianteira (FWD)</option><option value="rwd">Traseira (RWD)</option><option value="awd">Integral (AWD)</option></select><label for="time-rate">Passagem do tempo</label><select id="time-rate"><option value="120">Um dia em 12 minutos</option><option value="300">Um dia em 4 min 48 s</option><option value="600">Um dia em 2 min 24 s</option></select><label class="toggle-label" for="radio-toggle">R&aacute;dio ligado<input type="checkbox" id="radio-toggle" checked></label></div><div class="dialog-actions"><button class="secondary-button" id="recover-button"><i data-lucide="rotate-ccw"></i> Reposicionar carro</button><button class="start-button close-dialog"><i data-lucide="play"></i> Continuar</button></div></dialog>
       <dialog id="help-dialog" aria-labelledby="help-title"><div class="dialog-header"><div><span class="eyebrow">AO SEU RITMO</span><h2 id="help-title">Ao volante.</h2></div><button class="icon-button close-dialog" aria-label="Fechar controles"><i data-lucide="x"></i></button></div><dl class="bindings"><div><dt><kbd>W</kbd><kbd>S</kbd> / <kbd>&uarr;</kbd><kbd>&darr;</kbd></dt><dd>Acelerar &amp; frear / r&eacute;</dd></div><div><dt><kbd>A</kbd><kbd>D</kbd> / <kbd>&larr;</kbd><kbd>&rarr;</kbd></dt><dd>Virar / andar</dd></div><div><dt><kbd>Espa&ccedil;o</kbd></dt><dd>Freio de m&atilde;o</dd></div><div><dt><kbd>E</kbd></dt><dd>Entrar / sair do carro</dd></div><div><dt><kbd>C</kbd> / arrastar</dt><dd>C&acirc;mera / olhar ao redor</dd></div><div><dt><kbd>R</kbd><kbd>N</kbd><kbd>M</kbd></dt><dd>Esta&ccedil;&atilde;o / faixa / silenciar</dd></div><div><dt><kbd>Esc</kbd> / <kbd>H</kbd></dt><dd>Pausa / controles</dd></div></dl><div class="gamepad-note">GAMEPAD PADR&Atilde;O<span>RT / LT: acelerar e frear &middot; Anal&oacute;gico: dire&ccedil;&atilde;o<br>A: entrar/sair &middot; B: freio de m&atilde;o &middot; X: c&acirc;mera &middot; Y: r&aacute;dio</span></div></dialog>
     `);
     this.speed = this.element('speed');
@@ -133,6 +135,10 @@ export class UI {
       this.save();
     });
     this.element<HTMLSelectElement>('quality').addEventListener('change', event => { actions.quality((event.target as HTMLSelectElement).value); this.save(); });
+    this.element<HTMLSelectElement>('drive-type').addEventListener('change', event => {
+      const value = (event.target as HTMLSelectElement).value;
+      if (isDriveType(value)) { actions.drive(value); this.save(); }
+    });
     this.element<HTMLInputElement>('radio-toggle').addEventListener('change', event => { audio.enabled = (event.target as HTMLInputElement).checked; this.updateRadio(); });
     root.querySelectorAll<HTMLButtonElement>('[data-hold]').forEach(button => {
       button.addEventListener('pointerdown', event => { event.preventDefault(); button.setPointerCapture(event.pointerId); input.setTouch(button.dataset.hold!, true); });
@@ -190,18 +196,22 @@ export class UI {
   }
 
   private save(): void {
-    try { localStorage.setItem('santa-brisa-settings', JSON.stringify({ volume: this.audio.volume, enabled: this.audio.enabled, quality: this.element<HTMLSelectElement>('quality').value })); } catch {}
+    try { localStorage.setItem('santa-brisa-settings', JSON.stringify({ volume: this.audio.volume, enabled: this.audio.enabled, quality: this.element<HTMLSelectElement>('quality').value, drive: this.element<HTMLSelectElement>('drive-type').value })); } catch {}
   }
 
   private load(): void {
+    let drive: DriveType = DEFAULT_DRIVE_TYPE;
     try {
       const saved = JSON.parse(localStorage.getItem('santa-brisa-settings') || '{}');
+      if (isDriveType(saved.drive)) drive = saved.drive;
       if (typeof saved.volume === 'number' && Number.isFinite(saved.volume)) this.audio.volume = Math.max(0, Math.min(1, saved.volume));
       if (typeof saved.enabled === 'boolean') this.audio.enabled = saved.enabled;
       if (['low', 'medium', 'high'].includes(saved.quality)) { this.element<HTMLSelectElement>('quality').value = saved.quality; this.actions.quality(saved.quality); }
       this.element<HTMLInputElement>('volume').value = String(Math.round(this.audio.volume * 100));
       this.element('volume-value').textContent = `${Math.round(this.audio.volume * 100)}%`;
     } catch {}
+    this.element<HTMLSelectElement>('drive-type').value = drive;
+    this.actions.drive(drive);
   }
 
   update(player: Player, day: Daylight, yaw: number): void {

@@ -65,6 +65,7 @@ async function initialize(): Promise<void> {
     start: () => { if (map.kind === 'real') player.recover(); started = true; camera.orbit = 0; void audio.start(); },
     pause: value => { paused = value; audio.setPaused(value); },
     quality: setQuality,
+    drive: type => { player.car.driveType = type; },
     recover: () => player.recover(),
     camera: () => { camera.mode = (camera.mode + 1) % 2; ui.toast(camera.mode ? 'Camera proxima' : 'Camera de acompanhamento'); },
   }, map);

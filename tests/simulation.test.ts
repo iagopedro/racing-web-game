@@ -26,6 +26,26 @@ describe('driving simulation', () => {
     expect(car.body.quaternion.w).toBeGreaterThan(0.95);
   });
 
+  it('defaults to front-wheel drive and supports every drive type', () => {
+    for (const type of ['fwd', 'rwd', 'awd'] as const) {
+      const world = createPhysics();
+      const car = new CarPhysics(world, 0, 0, 0);
+      if (type === 'fwd') expect(car.driveType).toBe('fwd');
+      car.driveType = type;
+      for (let frame = 0; frame < 300; frame++) {
+        car.update({ throttle: 1, brake: 0, steer: 0, handbrake: false }, FIXED_STEP);
+        world.step(FIXED_STEP);
+      }
+      const forces = car.vehicle.wheelInfos.map(wheel => wheel.engineForce);
+      const front = Math.abs(forces[0]) + Math.abs(forces[1]);
+      const rear = Math.abs(forces[2]) + Math.abs(forces[3]);
+      if (type === 'fwd') { expect(front).toBeGreaterThan(0); expect(rear).toBe(0); }
+      if (type === 'rwd') { expect(rear).toBeGreaterThan(0); expect(front).toBe(0); }
+      if (type === 'awd') { expect(front).toBeGreaterThan(0); expect(front).toBeCloseTo(rear); }
+      expect(car.speed).toBeGreaterThan(10);
+    }
+  });
+
   it('cannot drive through a static wall', () => {
     const world = createPhysics();
     staticBox(world, 0, 2, 22, 30, 4, 2);
