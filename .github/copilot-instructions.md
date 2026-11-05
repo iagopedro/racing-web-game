@@ -25,6 +25,7 @@ Memoria fixa e versionada do projeto. Leia antes de alterar codigo e mantenha-a 
 - `world.removeBody` e O(n) (reindexa todos os corpos); evitar adicionar/remover em massa a cada quadro.
 - Ao mover/girar um corpo estatico, definir `aabbNeedsUpdate = true`, senao parte dos raios das rodas falha.
 - `RaycastVehicle`: right=0, up=1, forward=2, axle=(-1,0,0); `engineForce` negativo acelera para +Z local.
+- Tracao: `CarPhysics.driveType` (`fwd` padrao, `rwd`, `awd`) distribui `engineForce` entre rodas 0-1 (dianteiras) e 2-3 (traseiras); freio de mao sempre age nas traseiras. Escolha salva em `santa-brisa-settings.drive`. Validar com o teste de tipos de tracao em `tests/simulation.test.ts`.
 - NPCs cinematicos usam `allowSleep: false`: atribuir velocidade nao acorda um corpo dormindo.
 - `TerrainRay` inclui bordas compartilhadas da malha; `GroundHeightfield` limita cada celula pelas quatro alturas. Sem isso as rodas perdem contato em celulas descendentes ou em sela.
 - Personagem a pe: `WALK_SPEED = 6`, sem amortecimento linear, `ContactMaterial` sem atrito contra `world.defaultMaterial`. Chao e caixas estaticas precisam declarar `world.defaultMaterial`.
