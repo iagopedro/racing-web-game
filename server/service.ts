@@ -6,6 +6,7 @@ import { addMicrosoft, finishCity, normalizeOSM } from '../src/geo/normalize.ts'
 import type { CityData, RegionRequest } from '../src/geo/types.ts';
 import { CITY_VERSION, COPERNICUS_NOTICE } from '../src/geo/types.ts';
 import { urbanGround } from '../src/geo/terrain.ts';
+import { ROAD_PIPELINE_VERSION } from '../src/geo/roads.ts';
 import * as providers from './providers.ts';
 import { json, list, record } from './network.ts';
 
@@ -46,7 +47,7 @@ export class GeoService {
 
   async generate(request: RegionRequest, signal: AbortSignal, refresh = false): Promise<CityData> {
     const bounds = regionBounds(request.center, request.sizeKm * 1000);
-    const id = createHash('sha256').update(JSON.stringify({ pipeline: CITY_VERSION, request })).digest('hex').slice(0, 32);
+    const id = createHash('sha256').update(JSON.stringify({ pipeline: CITY_VERSION, roads: ROAD_PIPELINE_VERSION, request })).digest('hex').slice(0, 32);
     if (!refresh) {
       const cached = await this.cache.read<CityData>(id, 24 * 60 * 60 * 1000);
       if (cached?.version === CITY_VERSION) return cached;

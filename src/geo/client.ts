@@ -2,6 +2,7 @@ import { realMap, SANTA_BRISA } from '../world/map';
 import type { MapDefinition } from '../world/map';
 import type { CityData } from './types';
 import { CITY_VERSION } from './types';
+import { roadWarnings } from './roads';
 
 export async function geoRequest<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response;
@@ -25,5 +26,6 @@ export async function selectedMap(): Promise<MapDefinition> {
   if (data.id !== id || !Array.isArray(data.roads) || !Array.isArray(data.buildings) ||
       !data.terrain || data.terrain.heights.length !== (data.terrain.segments + 1) ** 2 ||
       !data.terrain.heights.every(Number.isFinite) || !Number.isFinite(data.spawn?.y)) throw new Error('Recorte salvo invalido. Gere a regiao novamente.');
+  for (const warning of roadWarnings(data.roads)) if (!data.warnings.includes(warning)) data.warnings.push(warning);
   return realMap(data);
 }

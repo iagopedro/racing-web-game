@@ -2,7 +2,7 @@ import type { Building, CityData, LocalPoint, Road } from './types';
 import { terrainHeight } from './coordinates';
 import { insidePolygon } from './geometry';
 import { SpatialIndex } from './spatial';
-import { bridgeHeight } from './roads';
+import { bridgeHeight, roadLanes } from './roads';
 
 export type RoutePoint = LocalPoint & { y: number };
 export function geographicRoutes(city: CityData): { cars: RoutePoint[][]; pedestrians: RoutePoint[][] } {
@@ -39,7 +39,7 @@ export function geographicRoutes(city: CityData): { cars: RoutePoint[][]; pedest
           const nextId = cycle[(index + 1) % cycle.length], next = graph.get(nextId)!.point;
           const road = graph.get(id)!.next.get(nextId)!;
           const distance = Math.hypot(next.x - previous.x, next.z - previous.z);
-          const lane = road.oneway ? Math.max(0, road.width / 2 - 1.55) : Math.min(3.2, road.width / 4);
+          const lane = road.width / 2 - road.width / roadLanes(road) / 2;
           const x = point.x + (next.z - previous.z) / Math.max(distance, 0.001) * lane;
           const z = point.z - (next.x - previous.x) / Math.max(distance, 0.001) * lane;
           return { x, z, y: road.bridge ? bridgeHeight(road, x, z) ?? point.y : terrainHeight(city.terrain, x, z) };

@@ -1,7 +1,61 @@
 import type { LocalPoint, Polygon, Road } from './types.ts';
 
+export const ROAD_PIPELINE_VERSION = 1;
+
+export function roadLanes(road: Pick<Road, 'width' | 'oneway'> & { lanes?: number }): number {
+  if (road.lanes && Number.isInteger(road.lanes) && road.lanes > 0 && road.lanes <= 12) return road.lanes;
+  return Math.max(1, Math.floor(road.width / 3));
+}
+
+export function laneTags(tags: Record<string, unknown>): Pick<Road, 'lanes' | 'lanesForward' | 'laneMarkings'> {
+  const count = (value: unknown) => /^(?:[1-9]|1[0-2])$/.test(String(value)) ? Number(value) : undefined;
+  return { lanes: count(tags.lanes), lanesForward: count(tags['lanes:forward']), laneMarkings: tags.lane_markings === 'no' ? false : undefined };
+}
+
+export function roadNetwork(roads: Road[]): Map<Road, { offsets: LocalPoint[]; junctions: Map<number, number> }> {
+  const network = new Map(roads.map(road => [road, { offsets: roadOffsets(road), junctions: new Map<number, number>() }]));
+  const nodes = new Map<string, { road: Road; index: number }[]>();
+  for (const road of roads) {
+    if (!road.drive || road.tunnel) continue;
+    road.points.forEach((point, index) => {
+      const key = `${Math.round(point.x * 100)}:${Math.round(point.z * 100)}:${road.layer}`;
+      const entries = nodes.get(key) ?? [];
+      entries.push({ road, index }); nodes.set(key, entries);
+    });
+  }
+  for (const entries of nodes.values()) {
+    const degree = entries.reduce((sum, entry) => sum + (entry.index > 0 ? 1 : 0) + (entry.index < entry.road.points.length - 1 ? 1 : 0), 0);
+    if (degree > 2) {
+      const radius = Math.max(...entries.map(entry => entry.road.width)) / 2 + 1;
+      for (const entry of entries) network.get(entry.road)!.junctions.set(entry.index, radius);
+    } else if (degree === 2 && entries.length === 2) {
+      const [first, second] = entries;
+      if (first.road.bridge || second.road.bridge) continue;
+      const previous = first.road.points[first.index === 0 ? 1 : first.index - 1];
+      const point = first.road.points[first.index];
+      const next = second.road.points[second.index === 0 ? 1 : second.index - 1];
+      const offset = roadOffsets({ points: [previous, point, next], width: Math.min(first.road.width, second.road.width) })[1];
+      for (const entry of entries) {
+        const sign = entry === first ? (entry.index === 0 ? -1 : 1) : (entry.index === 0 ? 1 : -1);
+        network.get(entry.road)!.offsets[entry.index] = { x: offset.x * sign, z: offset.z * sign };
+      }
+    }
+  }
+  return network;
+}
+
+export function roadWarnings(roads: Road[]): string[] {
+  const drive = roads.filter(road => road.drive && !road.tunnel);
+  const estimated = drive.filter(road => !road.lanes).length;
+  const narrow = drive.filter(road => road.width / roadLanes(road) < 2.5).length;
+  return [
+    `Demarcacao viaria aproximada, nao levantamento da sinalizacao real. ${estimated} trechos sem contagem de faixas preservada: divisao estimada pela largura. Gere novamente recortes antigos para recuperar tags de faixas.`,
+    ...(narrow ? [`${narrow} trechos com menos de 2,5 m por faixa: dimensoes da fonte preservadas, demarcacao omitida; requerem revisao dos dados.`] : []),
+  ];
+}
+
 export function roadWidth(tags: Record<string, unknown>, measure: (value: unknown) => number | undefined): Pick<Road, 'width' | 'widthSource'> {
-  const explicit = measure(tags.width) ?? measure(tags['width:carriageway']);
+  const explicit = measure(tags['width:carriageway']) ?? measure(tags.width);
   if (explicit) return { width: Math.max(0.5, Math.min(60, explicit)), widthSource: 'tag' };
   const lanes = typeof tags.lanes === 'string' && /^\d+$/.test(tags.lanes) ? Number(tags.lanes) : undefined;
   if (lanes && lanes <= 12) return { width: lanes * (['motorway', 'trunk'].includes(String(tags.highway)) ? 3.5 : 3.1), widthSource: 'lanes' };

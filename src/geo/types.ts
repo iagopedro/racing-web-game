@@ -21,6 +21,9 @@ export interface Road {
   heights: number[];
   width: number;
   widthSource: 'tag' | 'lanes' | 'estimated';
+  lanes?: number;
+  lanesForward?: number;
+  laneMarkings?: boolean;
   surface?: string;
   oneway: -1 | 0 | 1;
   layer: number;

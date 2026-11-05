@@ -4,10 +4,10 @@ import * as THREE from 'three';
 import { urbanGround } from '../src/geo/terrain';
 import { coastlineWater } from '../src/geo/coastline';
 import { insidePolygon, polygonArea } from '../src/geo/geometry';
-import { roadOffsets, roadSegment, roadWidth, bridgeHeight } from '../src/geo/roads';
+import { roadOffsets, roadSegment, roadWidth, bridgeHeight, roadLanes, laneTags, roadNetwork } from '../src/geo/roads';
 import { flatTerrain, terrainHeight } from '../src/geo/coordinates';
 import { lengthMeters, normalizeOSM, finishCity } from '../src/geo/normalize';
-import { bridgeGeometry, buildingBody, createRealCity, surfaceBody, terrainBody } from '../src/world/real-city';
+import { bridgeGeometry, buildingBody, createRealCity, roadGeometry, surfaceBody, terrainBody } from '../src/world/real-city';
 import { bodyOverlapsSphere } from '../src/core/collision';
 import { createPhysics, FIXED_STEP } from '../src/core/physics';
 import { Player } from '../src/systems/player';
@@ -18,6 +18,52 @@ import { cityFixture, osmFixture, region, ring } from './geo-fixture';
 import { geographicRoutes } from '../src/geo/routes';
 
 describe('street dimensions and missing geographic features', () => {
+  it('keeps paint in metre coordinates across curve segments and on the physical bridge', () => {
+    const city = cityFixture();
+    const road = { ...city.roads.find(road => road.drive)!, width: 6.2, lanes: 2, points: [{ x: 0, z: 0 }, { x: 30, z: 0 }, { x: 55, z: 10 }], heights: [0, 1, 3] };
+    for (const bridge of [false, true]) {
+      const geometry = roadGeometry({ ...road, bridge }, 2, city.terrain, roadOffsets(road), 30);
+      const paint = geometry.getAttribute('roadPaint');
+      for (let index = 0; index < paint.count; index++) {
+        expect(paint.getY(index)).toBeGreaterThanOrEqual(29.99);
+        expect(paint.getY(index)).toBeLessThanOrEqual(30 + Math.hypot(25, 10) + 0.01);
+        expect(Math.abs(paint.getX(index))).toBeLessThanOrEqual(3.101);
+        expect(paint.getZ(index)).toBeCloseTo(3.1);
+      }
+      if (bridge) expect(Array.from(geometry.getAttribute('position').array)).toEqual(Array.from(bridgeGeometry({ ...road, bridge }, 2).getAttribute('position').array));
+      geometry.dispose();
+    }
+    const unmarked = roadGeometry({ ...road, laneMarkings: false }, 1, city.terrain);
+    expect(Array.from(unmarked.getAttribute('roadPaint').array).every(value => value === 0)).toBe(true);
+    unmarked.dispose();
+  });
+  it('retains explicit lane information without accepting malformed counts', () => {
+    expect(laneTags({ lanes: '3', 'lanes:forward': '2', lane_markings: 'no' })).toEqual({ lanes: 3, lanesForward: 2, laneMarkings: false });
+    expect(laneTags({ lanes: '2;3' }).lanes).toBeUndefined();
+  });
+  it('places the two-way divider according to the declared forward lanes', () => {
+    const city = cityFixture(), road = { ...city.roads.find(road => road.drive)!, width: 9.3, lanes: 3, lanesForward: 2, oneway: 0 as const };
+    const geometry = roadGeometry(road, 1, city.terrain);
+    expect(geometry.getAttribute('roadSeparation').getX(0)).toBeCloseTo(-1.55);
+    geometry.dispose();
+  });
+  it('shares a cross-section across angled way endpoints and marks intersections separately', () => {
+    const base = cityFixture().roads.find(road => road.drive)!;
+    const first = { ...base, width: 6.2, points: [{ x: -30, z: 0 }, { x: 0, z: 0 }] };
+    const second = { ...base, width: 6.2, points: [{ x: 0, z: 0 }, { x: 25, z: 10 }] };
+    const network = roadNetwork([first, second]);
+    expect(network.get(first)!.offsets[1]).toEqual(network.get(second)!.offsets[0]);
+    const branch = { ...base, points: [{ x: 0, z: 0 }, { x: 0, z: -30 }] };
+    expect(roadNetwork([first, second, branch]).get(first)!.junctions.get(1)).toBeGreaterThan(3);
+    expect(roadNetwork([first, { ...branch, layer: 1 }]).get(first)!.junctions.size).toBe(0);
+  });
+  it('uses carriageway width and leaves estimated lanes wider than the 1.88 m vehicle', () => {
+    expect(roadWidth({ width: '12', 'width:carriageway': '6.2' }, lengthMeters).width).toBe(6.2);
+    for (const width of [3, 4.5, 6.2, 7, 9.3, 10.5]) {
+      expect(width / roadLanes({ width, oneway: 0 })).toBeGreaterThanOrEqual(3);
+    }
+    expect(roadLanes({ width: 7, oneway: 1, lanes: 3 })).toBe(3);
+  });
   it('distinguishes measured width, lanes and estimates without inflating a footpath into a street', () => {
     expect(roadWidth({ width: '12 ft', lanes: '8' }, lengthMeters)).toEqual({ width: 3.6576000000000004, widthSource: 'tag' });
     expect(roadWidth({ highway: 'secondary', lanes: '3' }, lengthMeters).width).toBeCloseTo(9.3);

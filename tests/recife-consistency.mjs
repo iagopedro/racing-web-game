@@ -3,6 +3,7 @@ import { mkdir, rm } from 'node:fs/promises';
 import { chromium } from '@playwright/test';
 import { projection, terrainHeight } from '../src/geo/coordinates.ts';
 import { insidePolygon } from '../src/geo/geometry.ts';
+import { roadLanes, roadNetwork, roadSegment } from '../src/geo/roads.ts';
 
 const base = process.env.TEST_URL || 'http://127.0.0.1:5174';
 const id = process.env.REAL_CITY_ID;
@@ -15,6 +16,30 @@ assert.equal(city.size, 5000);
 assert.equal(city.terrain.processing, 'urban-ground');
 assert.ok(Math.abs(city.center.lat + 8.0631) < 0.0001 && Math.abs(city.center.lon + 34.8712) < 0.0001);
 assert.equal(new Set(city.warnings).size, city.warnings.length);
+const network = roadNetwork(city.roads);
+const roadAudit = { roads: 0, segments: 0, declared: 0, fromLanes: 0, estimated: 0, minimumLaneWidth: Infinity };
+for (const road of city.roads.filter(road => road.drive && !road.tunnel)) {
+  roadAudit.roads++;
+  roadAudit[road.widthSource === 'tag' ? 'declared' : road.widthSource === 'lanes' ? 'fromLanes' : 'estimated']++;
+  const width = road.width / roadLanes(road);
+  roadAudit.minimumLaneWidth = Math.min(roadAudit.minimumLaneWidth, width);
+  assert.ok(width > 1.88, `${road.id} ${road.name}: faixa menor que o veiculo`);
+  const offsets = network.get(road).offsets;
+  for (let index = 1; index < road.points.length; index++) {
+    const polygon = roadSegment(road, index, offsets)[0];
+    assert.ok(polygon.every(point => Number.isFinite(point.x + point.z)), `${road.id}: coordenadas invalidas`);
+    const area = polygon.reduce((sum, point, corner) => {
+      const next = polygon[(corner + 1) % polygon.length];
+      return sum + point.x * next.z - next.x * point.z;
+    }, 0);
+    assert.ok(area < -1e-6, `${road.id}/${index}: segmento invertido ou degenerado`);
+    if (index > 1) {
+      const previous = roadSegment(road, index - 1, offsets)[0];
+      assert.deepEqual(previous[3], polygon[0]); assert.deepEqual(previous[2], polygon[1]);
+    }
+    roadAudit.segments++;
+  }
+}
 const project = projection(city.center).project;
 const anchors = [
   { name: 'Marco Zero', lat: -8.06316, lon: -34.87113, water: false },
@@ -110,6 +135,68 @@ try {
     if (result.traveled < result.targetDistance) await page.screenshot({ path: 'test-results/recife-driving-failure.png' });
     assert.ok(result.traveled >= result.targetDistance && result.displacement > result.targetDistance * 0.65 && result.upright > 0.8, JSON.stringify(result));
   }
+  await page.evaluate(road => {
+    const g = window.__game, point = road.points[15], next = road.points[16];
+    const yaw = Math.atan2(next.x - point.x, next.z - point.z);
+    g.player.car.reset(point.x, point.z, yaw, road.heights[15]);
+    g.camera.yaw = yaw; g.camera.orbit = 0;
+  }, roadsToDrive[0]);
+  for (const [view, width, height] of [['desktop', 1440, 900], ['mobile', 390, 844]]) {
+    await page.setViewportSize({ width, height });
+    for (const [period, hours] of [['day', 12], ['night', 0]]) {
+      await page.evaluate(hours => {
+        const g = window.__game; g.day.hours = hours; g.advance(60, { throttle: 0, brake: 1, steer: 0, handbrake: false });
+      }, hours);
+      const pixels = await page.evaluate(() => window.__game.pixels());
+      assert.ok(new Set(pixels.filter((_, index) => index % 4 !== 3)).size > 30, `${view}/${period}: cena sem variacao visual`);
+      await page.screenshot({ path: `test-results/recife-roads-${view}-${period}.png` });
+    }
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.evaluate(() => { window.__game.day.hours = 12; });
+  const performanceSession = await page.context().newCDPSession(page);
+  await performanceSession.send('Profiler.enable');
+  await performanceSession.send('Profiler.start');
+  const framePerformance = await page.evaluate(async () => {
+    const g = window.__game;
+    const sample = (count, warmup = 90) => new Promise(resolve => {
+      const frames = [];
+      let previous;
+      const frame = now => {
+        if (previous !== undefined && warmup-- <= 0) frames.push(now - previous);
+        previous = now;
+        if (frames.length < count) requestAnimationFrame(frame);
+        else { frames.sort((first, second) => first - second); resolve({ median: frames[Math.floor(count / 2)], p99: frames[Math.floor(count * 0.99)], max: frames[count - 1] }); }
+      };
+      requestAnimationFrame(frame);
+    });
+    const materials = new Set();
+    g.scene.traverse(object => {
+      if (object.isMesh && object.material.customProgramCacheKey?.() === 'road-paint-v1') materials.add(object.material);
+    });
+    const originals = [...materials].map(material => ({ material, compile: material.onBeforeCompile, key: material.customProgramCacheKey }));
+    const rounds = [];
+    try {
+      for (const painted of [false, true, false, true]) {
+        for (const { material, compile, key } of originals) {
+          material.onBeforeCompile = painted ? compile : () => {};
+          material.customProgramCacheKey = painted ? key : () => 'road-baseline';
+          material.needsUpdate = true;
+        }
+        rounds.push({ painted, ...await sample(180) });
+      }
+    } finally {
+      for (const { material, compile, key } of originals) { material.onBeforeCompile = compile; material.customProgramCacheKey = key; material.needsUpdate = true; }
+    }
+    const start = performance.now();
+    for (let index = 0; index < 120; index++) g.physics.step(1 / 60);
+    return { rounds, physicsStep: (performance.now() - start) / 120, bodies: g.physics.bodies.length, draws: g.snapshot().draws };
+  });
+  const { profile } = await performanceSession.send('Profiler.stop');
+  await performanceSession.detach();
+  const counts = new Map();
+  profile.samples.forEach((id, index) => counts.set(id, (counts.get(id) ?? 0) + profile.timeDeltas[index]));
+  const hotspots = profile.nodes.map(node => ({ name: node.callFrame.functionName, ms: (counts.get(node.id) ?? 0) / 1000 })).sort((first, second) => second.ms - first.ms).slice(0, 8);
   await page.evaluate(() => {
     const g = window.__game; g.player.recover(); g.day.hours = 12; g.advance(180, { throttle: 0, brake: 1, steer: 0, handbrake: false });
   });
@@ -152,7 +239,7 @@ try {
   assert.deepEqual(errors, []);
   await rm('test-results/recife-driving-failure.png', { force: true });
   console.log(JSON.stringify({
-    result: 'PASS', maxGrade, rawMaxGrade, anchors,
+    result: 'PASS', roadAudit, framePerformance, hotspots, maxGrade, rawMaxGrade, anchors,
     drives: drives.map(({ name, traveled, displacement, maxSpeed, upright }) => ({ name, traveled, displacement, maxSpeed, upright })), walk,
   }, null, 2));
 } finally { await browser.close(); }

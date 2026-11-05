@@ -15,6 +15,7 @@ Memoria fixa e versionada do projeto. Leia antes de alterar codigo e mantenha-a 
 - Loop em `src/main.ts`: fisica em passo fixo `FIXED_STEP = 1/60`, ate 6 subpassos e acumulador limitado a um passo (sem espiral de recuperacao). A renderizacao interpola entre `previousPosition/previousQuaternion` e a pose atual usando `alpha`.
 - Ao teleportar corpos (reset, recover, sair do carro), copiar tambem `previousPosition`/`previousQuaternion` para nao interpolar o salto.
 - Terreno visual, heightfield fisico e amostragem compartilham a mesma triangulacao. Superficies sao recortadas nos triangulos do piso; colisores de pontes derivam dos mesmos triangulos visiveis.
+- Vias: `width:carriageway` prevalece sobre `width`; preservar faixas declaradas e explicitar estimativas. Pintura acompanha a geometria do piso em metros, sem objetos por faixa, e e interrompida nos cruzamentos. Nao alargar fontes para acomodar o carro nem deslocar polilinhas para inventar curvas. `ROAD_PIPELINE_VERSION` versiona novas geracoes sem invalidar caches compativeis antigos.
 - Cidades reais: malhas agrupadas em setores de 128 m, visiveis ate 850 m. Todos os colisores estaticos (predios, pontes, limites) sao transmitidos por setor: ativos a menos de 260 m do jogador **ou** do carro estacionado. Colisores de predios sao pre-construidos em fatias de 1 ms a menos de 480 m e reaproveitados. A ativacao ocorre antes do passo fisico.
 - O hook de desenvolvimento `window.__game` (`snapshot`, `advance`, `pixels`) sustenta os testes de navegador; mantenha-o compativel.
 
@@ -54,6 +55,7 @@ Memoria fixa e versionada do projeto. Leia antes de alterar codigo e mantenha-a 
 
 ## Licoes aprendidas
 
+- **Pistas e faixas:** a normalizacao descartava tags de faixas e trechos independentes deixavam bordas desalinhadas. Preservar metadados, compartilhar secoes nas juncoes terrestres e pintar no material existente; alinhar NPCs as faixas. Validar todos os segmentos de Recife, fisica em vias de referencia, screenshots dia/noite desktop/movel e profiler com/sem pintura. Dimensoes estimadas nao comprovam fidelidade real.
 - **Iluminacao noturna:** carro e ruas ficavam escuros demais. Ajustes de luz exigem screenshots desktop/movel de dia e de noite, preservando o ceu escuro.
 - **Personagem lento e lateral invertida:** atrito padrao de uma esfera com rotacao fixa consumia a velocidade, e o sinal do steer estava negado. Cobrir quatro direcoes, diagonais, soltura, parede e WASD real.
 - **Consistencia das cidades reais:** testes de aceleracao e pixels nao provavam continuidade do piso. O DSM criava rampas de 35,8%; a filtragem urbana reduziu para 9,6%. Colisores de pontes e saida do carro precisam usar as formas reais, nao AABBs.

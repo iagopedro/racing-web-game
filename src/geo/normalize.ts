@@ -4,7 +4,7 @@ import { cropLine, cropPolygon, overlapArea, polygonArea } from './geometry.ts';
 import { nearestOnSegment, projection, regionBounds, terrainHeight } from './coordinates.ts';
 import type { Building, CityData, LocalPoint, Polygon, RegionRequest, Road, Terrain } from './types.ts';
 import { CITY_VERSION } from './types.ts';
-import { roadWidth } from './roads.ts';
+import { laneTags, roadWidth } from './roads.ts';
 import { coastlineWater } from './coastline.ts';
 import { SpatialIndex } from './spatial.ts';
 
@@ -111,7 +111,7 @@ export function normalizeOSM(raw: unknown, request: RegionRequest, terrain: Terr
         vertices += points.length;
         const road: Road = {
           id: `${featureId}/${index}`, name: typeof tags.name === 'string' ? tags.name : kind,
-          kind: tags.waterway ? 'waterway' : kind, points, heights: [], ...dimensions,
+          kind: tags.waterway ? 'waterway' : kind, points, heights: [], ...dimensions, ...laneTags(tags),
           surface: typeof tags.surface === 'string' ? tags.surface : undefined,
           drive: drive && !tunnel, walk: ['footway', 'path', 'pedestrian'].includes(kind) && !tunnel && tags.foot !== 'no' && !['private', 'no'].includes(String(tags.access)),
           oneway: tags.oneway === '-1' ? -1 : ['yes', '1', 'true'].includes(String(tags.oneway)) || ((tags.junction === 'roundabout' || kind === 'motorway') && tags.oneway !== 'no') ? 1 : 0,

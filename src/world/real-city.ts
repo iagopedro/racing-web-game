@@ -2,8 +2,8 @@ import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { terrainHeight } from '../geo/coordinates';
-import { roadOffsets, roadSegment } from '../geo/roads';
-import type { Building, LocalPoint, Polygon, Terrain } from '../geo/types';
+import { roadLanes, roadNetwork, roadOffsets, roadSegment } from '../geo/roads';
+import type { Building, LocalPoint, Polygon, Road, Terrain } from '../geo/types';
 import type { RealMapDefinition } from './map';
 import type { City } from './city';
 
@@ -144,6 +144,73 @@ export function bridgeGeometry(road: import('../geo/types').Road, index: number,
   return geometry;
 }
 
+export function roadGeometry(road: Road, index: number, terrain: Terrain, offsets = roadOffsets(road), start = 0, limits = [-1e8, 1e8]): THREE.BufferGeometry {
+  const geometry = road.bridge ? bridgeGeometry(road, index, offsets) : drapedGeometry(roadSegment(road, index, offsets), terrain, 0.025);
+  const positions = geometry.getAttribute('position');
+  const paint = new Float32Array(positions.count * 4), separation = new Float32Array(positions.count * 4);
+  const lanes = roadLanes(road), laneWidth = road.width / lanes;
+  if (road.drive && !road.tunnel && road.laneMarkings !== false && laneWidth >= 2.5) {
+    const corners = roadSegment(road, index, offsets)[0];
+    const length = Math.hypot(road.points[index].x - road.points[index - 1].x, road.points[index].z - road.points[index - 1].z);
+    const forward = road.lanesForward && road.lanesForward < lanes ? road.lanesForward : Math.ceil(lanes / 2);
+    const divider = road.oneway === 0 && lanes > 1 ? road.width / 2 - forward * laneWidth : 1e5;
+    for (let vertex = 0; vertex < positions.count; vertex++) {
+      const x = positions.getX(vertex), z = positions.getZ(vertex);
+      for (const indices of [[0, 3, 1], [1, 3, 2]]) {
+        const [first, second, third] = indices.map(corner => corners[corner]);
+        const denominator = (second.z - third.z) * (first.x - third.x) + (third.x - second.x) * (first.z - third.z);
+        if (Math.abs(denominator) < 1e-8) continue;
+        const weightFirst = ((second.z - third.z) * (x - third.x) + (third.x - second.x) * (z - third.z)) / denominator;
+        const weightSecond = ((third.z - first.z) * (x - third.x) + (first.x - third.x) * (z - third.z)) / denominator;
+        const weights = [weightFirst, weightSecond, 1 - weightFirst - weightSecond];
+        if (Math.min(...weights) < -0.002 && indices[0] === 0) continue;
+        let across = 0, along = start;
+        indices.forEach((corner, offset) => {
+          across += weights[offset] * (corner === 0 || corner === 3 ? road.width / 2 : -road.width / 2);
+          if (corner >= 2) along += weights[offset] * length;
+        });
+        paint.set([across, along, laneWidth, lanes], vertex * 4);
+        separation.set([divider, road.width, limits[0], limits[1]], vertex * 4);
+        break;
+      }
+    }
+  }
+  geometry.setAttribute('roadPaint', new THREE.BufferAttribute(paint, 4));
+  geometry.setAttribute('roadSeparation', new THREE.BufferAttribute(separation, 4));
+  return geometry;
+}
+
+function paintRoads(material: THREE.MeshStandardMaterial): void {
+  material.customProgramCacheKey = () => 'road-paint-v1';
+  material.onBeforeCompile = shader => {
+    shader.vertexShader = shader.vertexShader.replace('#include <common>', `#include <common>
+attribute vec4 roadPaint;
+attribute vec4 roadSeparation;
+varying vec4 vRoadPaint;
+varying vec4 vRoadSeparation;`).replace('#include <begin_vertex>', `#include <begin_vertex>
+vRoadPaint = roadPaint;
+vRoadSeparation = roadSeparation;`);
+    shader.fragmentShader = shader.fragmentShader.replace('#include <common>', `#include <common>
+varying vec4 vRoadPaint;
+varying vec4 vRoadSeparation;`).replace('#include <color_fragment>', `#include <color_fragment>
+if (vRoadPaint.w > 0.5 && vRoadPaint.y > vRoadSeparation.z && vRoadPaint.y < vRoadSeparation.w) {
+  float across = vRoadPaint.x;
+  float laneWidth = vRoadPaint.z;
+  float width = vRoadSeparation.y;
+  float antialias = max(fwidth(across), 0.015);
+  float edge = abs(abs(across) - (width * 0.5 - 0.18));
+  float boundary = floor((across + width * 0.5) / laneWidth + 0.5);
+  float lane = abs(across + width * 0.5 - boundary * laneWidth);
+  float white = 1.0 - smoothstep(0.06, 0.06 + antialias, edge);
+  if (boundary > 0.5 && boundary < vRoadPaint.w - 0.5 && mod(vRoadPaint.y, 6.0) < 3.0 && abs(across - vRoadSeparation.x) > 0.3)
+    white = max(white, 1.0 - smoothstep(0.06, 0.06 + antialias, lane));
+  float yellow = 1.0 - smoothstep(0.05, 0.05 + antialias, abs(abs(across - vRoadSeparation.x) - 0.12));
+  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.88), white);
+  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.95, 0.65, 0.035), yellow);
+}`);
+  };
+}
+
 export function createRealCity(scene: THREE.Scene, world: CANNON.World, map: RealMapDefinition, texture?: THREE.Texture): City {
   const { data } = map;
   const terrain = data.terrain;
@@ -178,6 +245,12 @@ export function createRealCity(scene: THREE.Scene, world: CANNON.World, map: Rea
     const chunk = chunkAt(x, z);
     const flat = geometry.index ? geometry.toNonIndexed() : geometry;
     flat.deleteAttribute('uv');
+    if (color !== 0x505c60 && color !== 0xbeb9a3) {
+      flat.deleteAttribute('roadPaint'); flat.deleteAttribute('roadSeparation');
+    }
+    for (const name of color === 0x505c60 || color === 0xbeb9a3 ? ['roadPaint', 'roadSeparation'] : []) {
+      if (!flat.hasAttribute(name)) flat.setAttribute(name, new THREE.BufferAttribute(new Float32Array(flat.getAttribute('position').count * 4), 4));
+    }
     if (flat !== geometry) geometry.dispose();
     const parts = chunk.parts.get(color) ?? []; parts.push(flat); chunk.parts.set(color, parts);
   };
@@ -186,13 +259,22 @@ export function createRealCity(scene: THREE.Scene, world: CANNON.World, map: Rea
     const point = area.polygon[0][0];
     add(geometry, area.kind === 'water' ? 0x448f9a : area.kind === 'paved' ? 0xcbbfa6 : 0x739767, point.x, point.z);
   }
+  const network = roadNetwork(data.roads);
   for (const road of data.roads) {
     if (road.tunnel) continue;
-    const offsets = roadOffsets(road);
+    const { offsets, junctions } = network.get(road)!;
+    const distances = [0];
+    for (let index = 1; index < road.points.length; index++) distances.push(distances[index - 1] + Math.hypot(road.points[index].x - road.points[index - 1].x, road.points[index].z - road.points[index - 1].z));
+    const crossings = [...junctions].map(([index, radius]) => ({ distance: distances[index], radius })).sort((first, second) => first.distance - second.distance);
+    let crossingIndex = 0;
     for (let i = 1; i < road.points.length; i++) {
       const a = road.points[i - 1], b = road.points[i], length = Math.hypot(b.x - a.x, b.z - a.z);
       if (length < 0.01) continue;
-      const geometry = road.bridge ? bridgeGeometry(road, i, offsets) : drapedGeometry(roadSegment(road, i, offsets), terrain, 0.025);
+      const midpoint = (distances[i - 1] + distances[i]) / 2;
+      while (crossingIndex < crossings.length && crossings[crossingIndex].distance <= midpoint) crossingIndex++;
+      const before = crossings[crossingIndex - 1];
+      const after = crossings[crossingIndex];
+      const geometry = roadGeometry(road, i, terrain, offsets, distances[i - 1], [before ? before.distance + before.radius : -1e8, after ? after.distance - after.radius : 1e8]);
       if (road.bridge) {
         const body = surfaceBody(geometry, 0.3);
         body.collisionFilterGroup = 2;
@@ -231,6 +313,7 @@ export function createRealCity(scene: THREE.Scene, world: CANNON.World, map: Rea
           color, roughness: 0.9, side: THREE.DoubleSide,
           polygonOffset: layer > 0, polygonOffsetFactor: -layer, polygonOffsetUnits: -layer,
         }));
+        if (color === 0x505c60 || color === 0xbeb9a3) paintRoads(material.get(color)!);
       }
       const mesh = new THREE.Mesh(geometry, material.get(color));
       mesh.castShadow = ![0x448f9a, 0x739767, 0xcbbfa6, 0xbeb9a3, 0x505c60].includes(color); mesh.receiveShadow = true;
