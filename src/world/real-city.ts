@@ -15,6 +15,11 @@ function shapeOf(polygon: Polygon): THREE.Shape {
 function baseHeight(building: Building, terrain: Terrain): number {
   return Math.min(...building.polygon[0].map(point => terrainHeight(terrain, point.x, point.z)));
 }
+const SOLID_KEY = 0x1000000;
+// Draw order of surfaces lying on the terrain: water/grass, then paved areas and footways, then roads.
+function groundLayer(color: number): number {
+  return color === 0x505c60 ? 3 : [0xcbbfa6, 0xbeb9a3].includes(color) ? 2 : [0x448f9a, 0x739767, 0x8c8175].includes(color) ? 1 : 0;
+}
 
 // Clip each surface triangle to the terrain grid so roads cannot cut through hills.
 export function drapedGeometry(polygon: Polygon, terrain: Terrain, offset: number): THREE.BufferGeometry {
@@ -187,7 +192,7 @@ export function roadGeometry(road: Road, index: number, terrain: Terrain, offset
 }
 
 function paintRoads(material: THREE.MeshStandardMaterial): void {
-  material.customProgramCacheKey = () => 'road-paint-v1';
+  material.customProgramCacheKey = () => 'road-paint-v2';
   material.onBeforeCompile = shader => {
     shader.vertexShader = shader.vertexShader.replace('#include <common>', `#include <common>
 attribute vec4 roadPaint;
@@ -198,19 +203,25 @@ vRoadPaint = roadPaint;
 vRoadSeparation = roadSeparation;`);
     shader.fragmentShader = shader.fragmentShader.replace('#include <common>', `#include <common>
 varying vec4 vRoadPaint;
-varying vec4 vRoadSeparation;`).replace('#include <color_fragment>', `#include <color_fragment>
+varying vec4 vRoadSeparation;
+// Box-filtered coverage of a stripe and of 3 m dashes, so distant paint fades instead of shimmering.
+float stripe(float signedDistance, float halfWidth, float footprint) {
+  return clamp((min(signedDistance + footprint * 0.5, halfWidth) - max(signedDistance - footprint * 0.5, -halfWidth)) / footprint, 0.0, 1.0);
+}
+float painted(float along) { return floor(along / 6.0) * 3.0 + min(mod(along, 6.0), 3.0); }`).replace('#include <color_fragment>', `#include <color_fragment>
 if (vRoadPaint.w > 0.5 && vRoadPaint.y > vRoadSeparation.z && vRoadPaint.y < vRoadSeparation.w) {
   float across = vRoadPaint.x;
   float laneWidth = vRoadPaint.z;
   float width = vRoadSeparation.y;
-  float antialias = max(fwidth(across), 0.015);
-  float edge = abs(abs(across) - (width * 0.5 - 0.18));
+  float footprint = max(fwidth(across), 0.015);
+  float alongFootprint = max(fwidth(vRoadPaint.y), 0.015);
   float boundary = floor((across + width * 0.5) / laneWidth + 0.5);
-  float lane = abs(across + width * 0.5 - boundary * laneWidth);
-  float white = 1.0 - smoothstep(0.06, 0.06 + antialias, edge);
-  if (boundary > 0.5 && boundary < vRoadPaint.w - 0.5 && mod(vRoadPaint.y, 6.0) < 3.0 && abs(across - vRoadSeparation.x) > 0.3)
-    white = max(white, 1.0 - smoothstep(0.06, 0.06 + antialias, lane));
-  float yellow = 1.0 - smoothstep(0.05, 0.05 + antialias, abs(abs(across - vRoadSeparation.x) - 0.12));
+  float white = stripe(abs(across) - (width * 0.5 - 0.18), 0.06, footprint);
+  if (boundary > 0.5 && boundary < vRoadPaint.w - 0.5 && abs(across - vRoadSeparation.x) > 0.3) {
+    float dash = (painted(vRoadPaint.y + alongFootprint * 0.5) - painted(vRoadPaint.y - alongFootprint * 0.5)) / alongFootprint;
+    white = max(white, stripe(across + width * 0.5 - boundary * laneWidth, 0.06, footprint) * dash);
+  }
+  float yellow = stripe(abs(across - vRoadSeparation.x) - 0.12, 0.05, footprint);
   diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.88), white);
   diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.95, 0.65, 0.035), yellow);
 }`);
@@ -247,7 +258,7 @@ export function createRealCity(scene: THREE.Scene, world: CANNON.World, map: Rea
     chunk.collisionBounds.expandByPoint(new THREE.Vector3(body.aabb.upperBound.x, body.aabb.upperBound.y, body.aabb.upperBound.z));
     chunk.bodies.push(body); chunk.labels.set(body, label);
   };
-  const add = (geometry: THREE.BufferGeometry, color: number, x: number, z: number) => {
+  const add = (geometry: THREE.BufferGeometry, color: number, x: number, z: number, solid = false) => {
     const chunk = chunkAt(x, z);
     const flat = geometry.index ? geometry.toNonIndexed() : geometry;
     flat.deleteAttribute('uv');
@@ -258,7 +269,9 @@ export function createRealCity(scene: THREE.Scene, world: CANNON.World, map: Rea
       if (!flat.hasAttribute(name)) flat.setAttribute(name, new THREE.BufferAttribute(new Float32Array(flat.getAttribute('position').count * 4), 4));
     }
     if (flat !== geometry) geometry.dispose();
-    const parts = chunk.parts.get(color) ?? []; parts.push(flat); chunk.parts.set(color, parts);
+    // Elevated decks keep writing depth, so they get their own material.
+    const key = solid ? color + SOLID_KEY : color;
+    const parts = chunk.parts.get(key) ?? []; parts.push(flat); chunk.parts.set(key, parts);
   };
   for (const area of data.areas) {
     const geometry = drapedGeometry(area.polygon, terrain, 0.04);
@@ -286,7 +299,7 @@ export function createRealCity(scene: THREE.Scene, world: CANNON.World, map: Rea
         body.collisionFilterGroup = 2;
         addStatic(body, road.id, (a.x + b.x) / 2, (a.z + b.z) / 2);
       }
-      add(geometry, road.kind === 'waterway' ? 0x448f9a : road.surface === 'paving_stones' || !road.drive ? 0xbeb9a3 : 0x505c60, (a.x + b.x) / 2, (a.z + b.z) / 2);
+      add(geometry, road.kind === 'waterway' ? 0x448f9a : road.surface === 'paving_stones' || !road.drive ? 0xbeb9a3 : 0x505c60, (a.x + b.x) / 2, (a.z + b.z) / 2, road.bridge);
     }
   }
   for (const building of data.buildings) {
@@ -296,10 +309,10 @@ export function createRealCity(scene: THREE.Scene, world: CANNON.World, map: Rea
     const point = building.polygon[0][0];
     const palette = [0xd6cabb, 0xe2c4ac, 0xced4bd, 0xdbc2bb, 0xc4d2d0, 0xd9cfaf];
     const hash = [...building.id].reduce((value, char) => (Math.imul(value, 31) + char.charCodeAt(0)) >>> 0, 0);
-    add(geometry, building.color ? new THREE.Color(building.color).getHex() : palette[hash % palette.length], point.x, point.z);
+    add(geometry, building.color ? new THREE.Color(building.color).getHex() : palette[hash % palette.length], point.x, point.z, true);
     const roof = new THREE.ShapeGeometry(shapeOf(building.polygon));
     roof.rotateX(-Math.PI / 2); roof.translate(0, baseHeight(building, terrain) + building.height + 0.015, 0);
-    add(roof, 0x8c8175, point.x, point.z);
+    add(roof, 0x8c8175, point.x, point.z, true);
     const chunk = chunkAt(point.x, point.z), base = baseHeight(building, terrain);
     chunk.buildings.push(building);
     for (const point of building.polygon[0]) {
@@ -308,20 +321,25 @@ export function createRealCity(scene: THREE.Scene, world: CANNON.World, map: Rea
     }
   }
   const material = new Map<number, THREE.MeshStandardMaterial>();
+  let chunkIndex = 0;
   for (const chunk of chunks.values()) {
-    for (const [color, parts] of chunk.parts) {
+    chunkIndex++;
+    for (const [key, parts] of chunk.parts) {
       const geometry = mergeGeometries(parts);
       parts.forEach(part => part.dispose());
       if (!geometry) throw new Error('Falha ao agrupar geometria da cidade.');
-      if (!material.has(color)) {
-        const layer = color === 0x505c60 ? 3 : [0xcbbfa6, 0xbeb9a3].includes(color) ? 2 : [0x448f9a, 0x739767, 0x8c8175].includes(color) ? 1 : 0;
-        material.set(color, new THREE.MeshStandardMaterial({
-          color, roughness: 0.9, side: THREE.DoubleSide,
-          polygonOffset: layer > 0, polygonOffsetFactor: -layer, polygonOffsetUnits: -layer,
+      const color = key % SOLID_KEY, layer = groundLayer(color), decal = layer > 0 && key < SOLID_KEY;
+      if (!material.has(key)) {
+        material.set(key, new THREE.MeshStandardMaterial({
+          color, roughness: 0.9, side: THREE.DoubleSide, depthWrite: !decal,
+          polygonOffset: layer > 0, polygonOffsetFactor: -layer, polygonOffsetUnits: -4 * layer,
         }));
-        if (color === 0x505c60 || color === 0xbeb9a3) paintRoads(material.get(color)!);
+        if (color === 0x505c60 || color === 0xbeb9a3) paintRoads(material.get(key)!);
       }
-      const mesh = new THREE.Mesh(geometry, material.get(color));
+      const mesh = new THREE.Mesh(geometry, material.get(key));
+      // Ground overlays only test against the terrain depth and are stacked by draw order,
+      // so coplanar layers and overlapping streets cannot flicker as the camera moves.
+      if (decal) mesh.renderOrder = layer + chunkIndex * 1e-6;
       mesh.castShadow = ![0x448f9a, 0x739767, 0xcbbfa6, 0xbeb9a3, 0x505c60].includes(color); mesh.receiveShadow = true;
       chunk.group.add(mesh);
     }

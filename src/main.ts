@@ -143,11 +143,11 @@ async function initialize(): Promise<void> {
         player.sync(day.night); population.render(player.focus, player.car.body.position); city.update(seconds, day.night, player.focus, parkedCar.copy(player.car.body.position));
         if (renderFrame) { camera.update(player, 1, started); ui.update(player, day, camera.yaw); renderer.render(scene, camera.camera); }
       },
-      pixels: () => {
-        const target = new THREE.WebGLRenderTarget(64, 64);
+      pixels: (size = 64) => {
+        const target = new THREE.WebGLRenderTarget(size, size);
         renderer.setRenderTarget(target); renderer.render(scene, camera.camera);
-        const pixels = new Uint8Array(64 * 64 * 4);
-        renderer.readRenderTargetPixels(target, 0, 0, 64, 64, pixels);
+        const pixels = new Uint8Array(size * size * 4);
+        renderer.readRenderTargetPixels(target, 0, 0, size, size, pixels);
         renderer.setRenderTarget(null); target.dispose();
         return Array.from(pixels);
       },

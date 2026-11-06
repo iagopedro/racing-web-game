@@ -203,6 +203,25 @@ describe('visible surfaces and physical obstacles share geometry', () => {
     }
     expect(hits).toBeGreaterThan(70);
   });
+  it('stacks ground overlays by draw order while elevated decks and roofs keep writing depth', () => {
+    const city = cityFixture();
+    city.roads.push({ ...bridge, id: 'deck', points: bridge.points.map(point => ({ x: point.x + 60, z: point.z + 60 })), heights: [] });
+    finishCity(city);
+    const scene = new THREE.Scene();
+    createRealCity(scene, createPhysics(false), realMap(city));
+    const order = { 0x448f9a: 1, 0x739767: 1, 0xcbbfa6: 2, 0xbeb9a3: 2, 0x505c60: 3 } as Record<number, number>;
+    const seen = new Set<string>();
+    scene.traverse(object => {
+      if (!(object instanceof THREE.Mesh) || !(object.material instanceof THREE.MeshStandardMaterial)) return;
+      const color = object.material.color.getHex(), decal = !object.material.depthWrite;
+      if (decal) expect(Math.floor(object.renderOrder)).toBe(order[color]);
+      else expect(object.renderOrder).toBe(0);
+      if (color === 0x8c8175) expect(decal).toBe(false);
+      seen.add(`${color.toString(16)}:${decal}`);
+    });
+    expect(seen).toContain('505c60:true');
+    expect(seen).toContain('505c60:false');
+  });
   it('pushes a car overlapping a wall sideways instead of trapping it under the ground', () => {
     const terrain = flatTerrain(2000), world = createPhysics(false);
     world.addBody(terrainBody(terrain));
