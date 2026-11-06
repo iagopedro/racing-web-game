@@ -47,6 +47,9 @@ export class Player {
     if (map.kind === 'real') {
       const x = map.spawn.x - Math.sin(map.spawn.yaw) * 3.2, z = map.spawn.z - Math.cos(map.spawn.yaw) * 3.2;
       this.walker.position.set(x, surfaceHeight(map, x, z, map.data.spawn.y + 1) + 0.55, z);
+      // Real maps do not step physics before the start, so interpolation would blend with the old pose.
+      this.walker.previousPosition.copy(this.walker.position);
+      this.walker.interpolatedPosition.copy(this.walker.position);
     }
     world.addBody(this.walker);
     this.lights = [-0.6, 0.6].map(side => {

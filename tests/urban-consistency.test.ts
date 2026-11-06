@@ -222,6 +222,14 @@ describe('visible surfaces and physical obstacles share geometry', () => {
     expect(car.body.position.z).toBeLessThan(-4.6);
     expect(car.vehicle.wheelInfos.every(wheel => wheel.isInContact)).toBe(true);
   });
+  it('starts the walker on a real map with a matching interpolation pose', () => {
+    const player = new Player(new THREE.Scene(), createPhysics(false), realMap(cityFixture()));
+    expect(player.walker.previousPosition.almostEquals(player.walker.position, 1e-9)).toBe(true);
+    for (const alpha of [0, 0.37, 0.81]) {
+      player.sync(0, alpha);
+      expect(player.person.group.position.y).toBeCloseTo(player.walker.position.y - 0.42, 9);
+    }
+  });
   it('allows opening the door in a courtyard inside a building bounding box', () => {
     const city = cityFixture();
     city.buildings = [{
