@@ -9,7 +9,7 @@ import { flatTerrain, terrainHeight } from '../src/geo/coordinates';
 import { lengthMeters, normalizeOSM, finishCity } from '../src/geo/normalize';
 import { bridgeGeometry, buildingBody, createRealCity, roadGeometry, surfaceBody, terrainBody } from '../src/world/real-city';
 import { bodyOverlapsSphere } from '../src/core/collision';
-import { createPhysics, FIXED_STEP } from '../src/core/physics';
+import { CarPhysics, createPhysics, FIXED_STEP } from '../src/core/physics';
 import { Player } from '../src/systems/player';
 import { LoopRoute, Population } from '../src/systems/population';
 import { realMap } from '../src/world/map';
@@ -202,6 +202,25 @@ describe('visible surfaces and physical obstacles share geometry', () => {
       }
     }
     expect(hits).toBeGreaterThan(70);
+  });
+  it('pushes a car overlapping a wall sideways instead of trapping it under the ground', () => {
+    const terrain = flatTerrain(2000), world = createPhysics(false);
+    world.addBody(terrainBody(terrain));
+    const building: Building = {
+      id: 'wall', height: 9, minHeight: 0, heightSource: 'height', source: 'osm',
+      polygon: [[{ x: -10, z: -2.5 }, { x: 10, z: -2.5 }, { x: 10, z: 12 }, { x: -10, z: 12 }]],
+    };
+    world.addBody(buildingBody(building, terrain));
+    const car = new CarPhysics(world, 0, -1.5, 0);
+    let lowest = Infinity;
+    for (let frame = 0; frame < 360; frame++) {
+      car.update({ throttle: 0, brake: 1, steer: 0, handbrake: false }, FIXED_STEP);
+      world.step(FIXED_STEP);
+      lowest = Math.min(lowest, car.body.position.y);
+    }
+    expect(lowest).toBeGreaterThan(0.3);
+    expect(car.body.position.z).toBeLessThan(-4.6);
+    expect(car.vehicle.wheelInfos.every(wheel => wheel.isInContact)).toBe(true);
   });
   it('allows opening the door in a courtyard inside a building bounding box', () => {
     const city = cityFixture();

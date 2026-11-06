@@ -126,11 +126,17 @@ export function surfaceBody(geometry: THREE.BufferGeometry, depth: number): CANN
   return body;
 }
 
+// Colliders reach below the ground: with the bottom face at ground level, a car
+// overlapping a wall is resolved downward and trapped under the terrain.
+export const BUILDING_FOUNDATION = 4;
+
 export function buildingBody(building: Building, terrain: Terrain): CANNON.Body {
   const roof = new THREE.ShapeGeometry(shapeOf(building.polygon));
   roof.rotateX(-Math.PI / 2);
   roof.translate(0, baseHeight(building, terrain) + building.height, 0);
-  const body = surfaceBody(roof, building.height - building.minHeight);
+  // Gaps lower than a car cannot be driven through, so they are closed as well.
+  const bottom = building.minHeight < 2.5 ? -BUILDING_FOUNDATION : building.minHeight;
+  const body = surfaceBody(roof, building.height - bottom);
   roof.dispose();
   return body;
 }

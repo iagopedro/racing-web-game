@@ -99,6 +99,7 @@ A primeira entrega tinha testes de aceleracao e pixels, mas isso nao comprovava 
 | Tabuleiro curvo e colisor tinham contornos diferentes | Centenas de raios comparando exatamente malha e corpo nas bordas das pontes |
 | Saida bloqueada por AABB e obstaculos descarregados perto do carro estacionado | Entrada/saida dentro de patio, limites visiveis e ativacao de setores |
 | NPCs no eixo central, bloqueio entre niveis e colisores ocultos | Posicao na faixa, obstaculos elevados, rotas degeneradas e paridade entre visibilidade/colisao |
+| Carro sobreposto a um edificio era empurrado para baixo do piso e ficava preso | Colisores de edificios descem 4 m abaixo do terreno; teste de parede sobreposta e sondagem de centenas de saidas de via no Recife |
 
 No recorte de 5 km usado na revisao, a inclinacao maxima amostrada das vias terrestres caiu de 35.8% para 9.6%. Isso e uma medida de consistencia de jogabilidade, **nao prova de exatidao altimetrica**. A fidelidade visual de fachadas, monumentos, sinalizacao e mobiliario continua incompleta.
 

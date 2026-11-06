@@ -31,6 +31,7 @@ Memoria fixa e versionada do projeto. Leia antes de alterar codigo e mantenha-a 
 - Personagem a pe: `WALK_SPEED = 6`, sem amortecimento linear, `ContactMaterial` sem atrito contra `world.defaultMaterial`. Chao e caixas estaticas precisam declarar `world.defaultMaterial`.
 - Camera: forward=(sin(yaw),0,cos(yaw)); esquerda da tela=(cos(yaw),0,-sin(yaw)). `Input.steer` e positivo para A e nao deve ser negado ao andar.
 - Visibilidade e resposta de colisao de NPCs andam juntas.
+- Colisores fechados (predios) precisam descer abaixo do terreno (`BUILDING_FOUNDATION`): com a base no nivel do piso, o SAT resolve a sobreposicao para baixo e prende o carro sob o heightfield. Vias terrestres sao drapeadas no mesmo terreno, entao o solo lateral nunca fica abaixo da pista.
 
 ## Desempenho
 
@@ -60,6 +61,7 @@ Memoria fixa e versionada do projeto. Leia antes de alterar codigo e mantenha-a 
 - **Iluminacao noturna:** carro e ruas ficavam escuros demais. Ajustes de luz exigem screenshots desktop/movel de dia e de noite, preservando o ceu escuro.
 - **Personagem lento e lateral invertida:** atrito padrao de uma esfera com rotacao fixa consumia a velocidade, e o sinal do steer estava negado. Cobrir quatro direcoes, diagonais, soltura, parede e WASD real.
 - **Consistencia das cidades reais:** testes de aceleracao e pixels nao provavam continuidade do piso. O DSM criava rampas de 35,8%; a filtragem urbana reduziu para 9,6%. Colisores de pontes e saida do carro precisam usar as formas reais, nao AABBs.
+- **Carro afundando em buraco invisivel (2026-11-05):** nao era o relevo (vias drapeadas no proprio terreno; depressoes de no maximo 0,29 m no Recife). A base dos colisores de predios ficava no piso; com o carro sobreposto a uma parede, o contato tinha normal (0,-1,0) e o prendia sob o terreno. Solucao: fundacao de 4 m abaixo do solo. Validar com sondagem fisica de saidas de via (sobreposicao, frontal, obliqua) e o teste de parede sobreposta, que falha sem a correcao.
 - **Degradacao de desempenho (2026-11-05):** cerca de 2.600 corpos estaticos sempre ativos e a matriz de colisao O(n^2) levavam o passo a 17 ms. A solucao foi `ObjectCollisionMatrix`, streaming de todos os colisores por setor, pre-construcao fatiada, acumulador limitado e interpolacao de renderizacao. Resultado: passo de 0,9 ms. Sempre investigar com profiler antes de supor vazamentos.
 
 ## Regra de manutencao desta memoria
