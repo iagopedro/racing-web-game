@@ -40,6 +40,7 @@ export interface DriveInput { throttle: number; brake: number; steer: number; ha
 export type DriveType = 'fwd' | 'rwd' | 'awd';
 export const DRIVE_TYPES: readonly DriveType[] = ['fwd', 'rwd', 'awd'];
 export const DEFAULT_DRIVE_TYPE: DriveType = 'fwd';
+export const DRIVE_LABELS: Record<DriveType, string> = { fwd: 'Dianteira', rwd: 'Traseira', awd: 'Integral' };
 
 export function isDriveType(value: unknown): value is DriveType {
   return typeof value === 'string' && (DRIVE_TYPES as readonly string[]).includes(value);

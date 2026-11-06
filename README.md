@@ -127,7 +127,7 @@ Em telas de toque, use as setas e o botao de entrada/saida. Camera e radio tambe
 
 Gamepads com mapeamento padrao: analogico esquerdo para direcao, RT/LT para acelerar/frear e re, A para entrar/sair, B para freio de mao, X para camera, Y para estacao, Start para pausa. A implementacao esta presente, mas nao foi validada com hardware fisico nesta entrega.
 
-O menu permite alterar volume, qualidade grafica, tipo de tracao do carro (dianteira, traseira ou integral) e velocidade do tempo. **Reposicionar carro** recupera um veiculo preso ou capotado na via proxima. Volume, qualidade, tracao e estado do radio sao salvos localmente; o estado do mundo nao e salvo. Ao perder visibilidade, a pagina pausa a simulacao e o audio.
+O menu permite alterar volume, qualidade grafica, tipo de tracao do carro (dianteira, traseira ou integral; o painel de velocidade exibe a tracao ativa) e velocidade do tempo. **Reposicionar carro** recupera um veiculo preso ou capotado na via proxima. Volume, qualidade, tracao e estado do radio sao salvos localmente; o estado do mundo nao e salvo. Ao perder visibilidade, a pagina pausa a simulacao e o audio.
 
 ## Experiencia Implementada
 

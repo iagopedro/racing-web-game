@@ -135,6 +135,11 @@ try {
   await page.waitForTimeout(300);
   assert.equal((await snapshot()).seconds, pausedTime);
   await page.locator('#quality').selectOption('low');
+  assert.equal(await page.locator('#drive-type').inputValue(), 'fwd');
+  assert.equal((await snapshot()).driveType, 'fwd');
+  await page.locator('#drive-type').selectOption('rwd');
+  assert.equal((await snapshot()).driveType, 'rwd');
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('santa-brisa-settings')).drive), 'rwd');
   await page.locator('#time-rate').selectOption('300');
   assert.equal(await page.evaluate(() => window.__game.day.rate), 300);
   await page.locator('#volume').focus();
@@ -144,6 +149,13 @@ try {
   await page.locator('#volume').press('End');
   await page.locator('#quality').selectOption('medium');
   await page.getByRole('button', { name: 'Continuar', exact: true }).click();
+  await page.evaluate(() => window.__game.advance(1));
+  assert.equal(await page.locator('#car-name').textContent(), 'TRACAO TRASEIRA');
+  await page.getByRole('button', { name: 'Abrir ajustes' }).click();
+  await page.locator('#drive-type').selectOption('fwd');
+  await page.getByRole('button', { name: 'Continuar', exact: true }).click();
+  await page.evaluate(() => window.__game.advance(1));
+  assert.equal(await page.locator('#car-name').textContent(), 'TRACAO DIANTEIRA');
   await page.evaluate(() => { window.__game.player.recover(); window.__game.day.hours = 12; window.__game.advance(1); });
   await pixelCheck();
   await page.screenshot({ path: `${output}/desktop-driving.png` });
@@ -204,7 +216,7 @@ try {
   assert.equal(await mobile.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await mobileContext.close();
   assert.deepEqual(errors, [], 'Browser errors');
-  console.log(JSON.stringify({ result: 'PASS', checks: ['nonblank 3D canvas', 'keyboard driving and braking', 'safe entry and exit', 'station and track switching', 'real audio signal', 'camera switch', 'pause and settings', 'day and night pixels', 'world boundary collision', 'three-minute simulation', 'mobile touch driving', 'mobile HUD overlap'], daylightPixels, nightPixels, runtime: await snapshot(), screenshots: output }, null, 2));
+  console.log(JSON.stringify({ result: 'PASS', checks: ['nonblank 3D canvas', 'keyboard driving and braking', 'safe entry and exit', 'station and track switching', 'real audio signal', 'camera switch', 'pause and settings', 'drive type HUD', 'day and night pixels', 'world boundary collision', 'three-minute simulation', 'mobile touch driving', 'mobile HUD overlap'], daylightPixels, nightPixels, runtime: await snapshot(), screenshots: output }, null, 2));
 } finally {
   await browser.close();
 }

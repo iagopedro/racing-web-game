@@ -137,7 +137,7 @@ async function initialize(): Promise<void> {
   if (import.meta.env.DEV) {
     Object.assign(window, { __game: {
       player, population, day, audio, camera, physics, ui, map, city, scene,
-      snapshot: () => ({ started, paused, quality, driving: player.driving, speed: player.car.speed, position: player.car.body.position.clone(), hours: day.hours, night: day.night, seconds, fps: Math.round(fps), draws: renderer.info.render.calls, triangles: renderer.info.render.triangles, station: audio.station.name, track: audio.track.name, audioState: audio.context?.state, audioLevel: audio.level, traffic: population.cars.filter(car => car.active).length, pedestrians: population.pedestrians.length }),
+      snapshot: () => ({ started, paused, quality, driving: player.driving, driveType: player.car.driveType, speed: player.car.speed, position: player.car.body.position.clone(), hours: day.hours, night: day.night, seconds, fps: Math.round(fps), draws: renderer.info.render.calls, triangles: renderer.info.render.triangles, station: audio.station.name, track: audio.track.name, audioState: audio.context?.state, audioLevel: audio.level, traffic: population.cars.filter(car => car.active).length, pedestrians: population.pedestrians.length }),
       advance: (steps: number, drive = { throttle: 0, brake: 0, steer: 0, handbrake: false }, renderFrame = true) => {
         for (let step = 0; step < Math.min(steps, 36000); step++) fixedUpdate(drive);
         player.sync(day.night); population.render(player.focus, player.car.body.position); city.update(seconds, day.night, player.focus, parkedCar.copy(player.car.body.position));
